@@ -9,6 +9,7 @@ flurry of new-case ingestions does not spawn N parallel NUTS runs.
 
 from __future__ import annotations
 
+import collections
 import logging
 import threading
 import time
@@ -44,6 +45,17 @@ class JobRecord:
     completed_at: datetime | None = None
     detail: dict[str, Any] = field(default_factory=dict)
     error: str | None = None
+    progress_events: collections.deque = field(
+        default_factory=lambda: collections.deque(maxlen=200)
+    )
+
+    def push_event(self, event: dict) -> None:
+        self.progress_events.append(event)
+
+    def drain_events(self) -> list[dict]:
+        events = list(self.progress_events)
+        self.progress_events.clear()
+        return events
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -117,6 +129,17 @@ class JobManager:
 
     def list_recent(self, limit: int = 20) -> list[JobRecord]:
         return sorted(self._jobs.values(), key=lambda record: record.scheduled_at, reverse=True)[:limit]
+
+    def push_event(self, job_id: str, event: dict) -> None:
+        record = self._jobs.get(job_id)
+        if record is not None:
+            record.push_event(event)
+
+    def drain_events(self, job_id: str) -> list[dict]:
+        record = self._jobs.get(job_id)
+        if record is None:
+            return []
+        return record.drain_events()
 
     def shutdown(self) -> None:
         self._executor.shutdown(wait=False, cancel_futures=True)

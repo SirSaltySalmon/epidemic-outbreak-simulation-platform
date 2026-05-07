@@ -1,6 +1,9 @@
+import asyncio
+import json
 from uuid import UUID
 
 from fastapi import APIRouter, HTTPException, Query, Request, status
+from fastapi.responses import StreamingResponse
 
 from eosp.core.models import (
     CaseCreate,
@@ -165,6 +168,35 @@ def inference_job_status(job_id: str, request: Request):
     if record is None:
         raise HTTPException(status_code=404, detail="Job not found")
     return record.to_dict()
+
+
+@router.get("/inference/jobs/{job_id}/events")
+async def job_events_stream(job_id: str, request: Request):
+    jobs = getattr(request.app.state, "jobs", None)
+    if jobs is None:
+        raise HTTPException(status_code=503, detail="Job manager unavailable")
+    if jobs.get_status(job_id) is None:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    async def generate():
+        while True:
+            if await request.is_disconnected():
+                break
+            events = jobs.drain_events(job_id)
+            for event in events:
+                yield f"data: {json.dumps(event)}\n\n"
+            record = jobs.get_status(job_id)
+            if record is not None and record.status in ("completed", "failed"):
+                yield f"data: {json.dumps({'stage': 'complete', 'status': record.status, 'detail': record.detail})}\n\n"
+                break
+            await asyncio.sleep(0.5)
+        yield "data: {\"type\": \"close\"}\n\n"
+
+    return StreamingResponse(
+        generate(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 @router.get("/inference/jobs")

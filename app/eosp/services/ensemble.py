@@ -15,7 +15,7 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 from time import perf_counter
-from typing import Iterable, Mapping
+from typing import Callable, Iterable, Mapping
 
 import numpy as np
 
@@ -46,6 +46,7 @@ def run_ensemble(
     seed: SeedState,
     config: EnsembleConfig | None = None,
     posterior_samples: Mapping[str, np.ndarray] | None = None,
+    progress_callback: Callable[[dict], None] | None = None,
 ) -> ForecastResponse:
     config = config or EnsembleConfig()
     started_at = perf_counter()
@@ -68,6 +69,9 @@ def run_ensemble(
         rng_seed=config.rng_seed,
         parallel=config.parallel,
         max_workers=config.max_workers,
+        progress_callback=progress_callback,
+        n_simulations=config.n_simulations,
+        scenario_name=scenario.name,
     )
 
     elapsed = round(perf_counter() - started_at, 3)
@@ -193,8 +197,12 @@ def _run_trajectories(
     rng_seed: int,
     parallel: bool,
     max_workers: int | None,
+    progress_callback: Callable[[dict], None] | None = None,
+    n_simulations: int = 0,
+    scenario_name: str = "",
 ) -> list[Trajectory]:
-    n_simulations = len(samples["p_transmit"])
+    n_simulations = n_simulations or len(samples["p_transmit"])
+    BATCH_REPORT = 500
 
     def run_one(index: int) -> Trajectory:
         sample_rng = np.random.default_rng((rng_seed + index) & 0xFFFFFFFF)
@@ -214,12 +222,53 @@ def _run_trajectories(
         )
 
     if not parallel or n_simulations < 64:
-        return [run_one(index) for index in range(n_simulations)]
+        results: list[Trajectory] = []
+        for i in range(n_simulations):
+            results.append(run_one(i))
+            if progress_callback and (i + 1) % BATCH_REPORT == 0:
+                progress_callback({
+                    "stage": "simulation",
+                    "status": "running",
+                    "trajectories": i + 1,
+                    "total": n_simulations,
+                    "scenario": scenario_name,
+                    "fan_sample": _sample_fan(results, n_days=n_days, k=10),
+                })
+        return results
+
+    from concurrent.futures import as_completed
 
     workers = max_workers or min(8, max(1, (os.cpu_count() or 4)))
+    results = [None] * n_simulations
+    completed_count = 0
+    last_reported = 0
     with ThreadPoolExecutor(max_workers=workers) as pool:
-        results = list(pool.map(run_one, range(n_simulations)))
+        future_to_index = {pool.submit(run_one, i): i for i in range(n_simulations)}
+        for future in as_completed(future_to_index):
+            idx = future_to_index[future]
+            results[idx] = future.result()
+            completed_count += 1
+            if progress_callback and completed_count - last_reported >= BATCH_REPORT:
+                last_reported = completed_count
+                done_so_far = [r for r in results if r is not None]
+                progress_callback({
+                    "stage": "simulation",
+                    "status": "running",
+                    "trajectories": completed_count,
+                    "total": n_simulations,
+                    "scenario": scenario_name,
+                    "fan_sample": _sample_fan(done_so_far, n_days=n_days, k=10),
+                })
     return results
+
+
+def _sample_fan(trajectories: list[Trajectory], n_days: int, k: int = 10) -> list[list[float]]:
+    """Return k randomly sampled cumulative-case arrays for the fan-chart."""
+    if not trajectories:
+        return []
+    rng = np.random.default_rng(42)
+    chosen = rng.choice(len(trajectories), size=min(k, len(trajectories)), replace=False)
+    return [trajectories[i].cumulative_cases[1:].tolist() for i in chosen]
 
 
 def _aggregate_points(

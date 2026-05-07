@@ -177,6 +177,16 @@ class JobManager:
         if not cases:
             record.detail["skipped"] = "no_cases"
             return
+
+        record.push_event({
+            "stage": "cases",
+            "status": "complete",
+            "n_cases": len(cases),
+            "quality_mean": round(
+                sum(c.validation_score for c in cases) / len(cases), 3
+            ),
+        })
+
         try:
             artifacts = run_inference(
                 cases=cases,
@@ -186,7 +196,7 @@ class JobManager:
             )
         except RuntimeError as exc:
             record.detail["inference_error"] = str(exc)
-            logger.warning("Inference unavailable, falling back to existing posterior: %s", exc)
+            logger.warning("Inference unavailable, falling back: %s", exc)
             artifacts = None
 
         if artifacts is not None:
@@ -194,12 +204,35 @@ class JobManager:
             record.detail["inference_version"] = artifacts.result.version
             inference = artifacts.result
             samples = artifacts.posterior_samples
+            diag = inference.diagnostics
+            record.push_event({
+                "stage": "inference",
+                "status": "complete",
+                "draw": diag.get("n_samples", self._inference_config.num_samples),
+                "total": diag.get("n_samples", self._inference_config.num_samples),
+                "rhat_max": diag.get(
+                    "rhat_max",
+                    max(diag["rhat"].values()) if diag.get("rhat") else 1.0,
+                ),
+                "divergences": diag.get("divergences", 0),
+                "params": {
+                    k: round(float(v.mean), 4)
+                    for k, v in inference.parameters.items()
+                    if k not in ("concentration", "initial_rate")
+                },
+                "chain_rhat": list(diag["rhat"].values()) if diag.get("rhat") else [],
+            })
         else:
             inference = self._repository.latest_inference()
             samples = None
+            record.push_event({"stage": "inference", "status": "skipped", "reason": "fallback"})
 
         seed = self._build_seed_state(cases)
         for scenario_name, spec in self._scenarios.items():
+
+            def _callback(event: dict, _jid: str = record.job_id) -> None:
+                self.push_event(_jid, event)
+
             response = run_ensemble(
                 scenario=spec,
                 inference=inference,
@@ -207,6 +240,7 @@ class JobManager:
                 seed=seed,
                 config=self._ensemble_config,
                 posterior_samples=samples,
+                progress_callback=_callback,
             )
             self._cache_forecast(scenario_name, response)
         record.detail["scenarios_refreshed"] = list(self._scenarios.keys())

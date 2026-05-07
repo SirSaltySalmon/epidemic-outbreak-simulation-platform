@@ -1,0 +1,63 @@
+{
+  "schema_version": 1,
+  "scenarios": [
+    {
+      "name": "baseline",
+      "description": "No interventions. Full ship + flight + destination network with inferred parameters.",
+      "network_modifications": {
+        "remove_edges": [],
+        "modify_weights": {},
+        "add_isolation": []
+      },
+      "parameter_overrides": {}
+    },
+    {
+      "name": "quarantine_immediate",
+      "description": "All ship passengers isolated in cabins from day 1; only household contacts retained.",
+      "network_modifications": {
+        "remove_edges": ["social", "transient", "workplace"],
+        "modify_weights": {"flight": 0.4, "household": 0.7},
+        "add_isolation": []
+      },
+      "parameter_overrides": {
+        "p_transmit_scale": 0.10
+      }
+    },
+    {
+      "name": "evacuation_delay_3d",
+      "description": "Ship remains in place for 3 extra days before evacuation; transmission continues.",
+      "network_modifications": {
+        "remove_edges": [],
+        "modify_weights": {"social": 0.55, "transient": 0.10},
+        "add_isolation": []
+      },
+      "parameter_overrides": {
+        "evacuation_delay_days": 3
+      }
+    },
+    {
+      "name": "evacuation_delay_7d",
+      "description": "Ship remains in place for 7 extra days before evacuation; transmission continues.",
+      "network_modifications": {
+        "remove_edges": [],
+        "modify_weights": {"social": 0.6, "transient": 0.15},
+        "add_isolation": []
+      },
+      "parameter_overrides": {
+        "evacuation_delay_days": 7
+      }
+    },
+    {
+      "name": "enhanced_destination_protocols",
+      "description": "All evacuees tested + isolated upon arrival; destination contacts effectively contained.",
+      "network_modifications": {
+        "remove_edges": [],
+        "modify_weights": {"hospital": 0.05, "family": 0.05},
+        "add_isolation": []
+      },
+      "parameter_overrides": {
+        "p_transmit_scale": 0.85
+      }
+    }
+  ]
+}

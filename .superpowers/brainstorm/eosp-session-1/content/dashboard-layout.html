@@ -1,0 +1,173 @@
+<style>
+  .mock-dash { background: #0f1f1d; border-radius: 10px; overflow: hidden; font-size: 11px; color: #ccc; font-family: monospace; }
+  .mock-topbar { background: #0a1614; padding: 7px 12px; display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #1e3530; }
+  .mock-topbar-left { color: #9ccac6; font-weight: bold; font-size: 10px; }
+  .mock-topbar-right { background: #1a3530; color: #d7f4ef; padding: 3px 8px; border-radius: 4px; font-size: 10px; }
+  .mock-metrics { display: grid; grid-template-columns: repeat(4, 1fr); gap: 4px; padding: 6px; }
+  .mock-kpi { background: #1a2e2b; border-radius: 5px; padding: 6px 8px; }
+  .mock-kpi .lbl { color: #6b9990; font-size: 9px; }
+  .mock-kpi .val { color: #fff; font-size: 15px; font-weight: bold; }
+  .mock-kpi .sub { color: #4a7a72; font-size: 9px; }
+  .mock-map { background: #112820; border-radius: 5px; position: relative; overflow: hidden; }
+  .mock-map-bg { width: 100%; background: linear-gradient(180deg, #0d2018 0%, #163528 100%); display: flex; align-items: center; justify-content: center; }
+  .mock-map-label { color: #2d6b5a; font-size: 10px; text-align: center; }
+  .mock-map-dot { position: absolute; width: 8px; height: 8px; border-radius: 50%; border: 1px solid; }
+  .mock-chart-area { background: #1a2e2b; border-radius: 5px; padding: 8px; }
+  .mock-chart-area .chart-title { color: #9ccac6; font-size: 9px; margin-bottom: 4px; }
+  .mock-chart-inner { background: #112820; border-radius: 3px; height: 60px; display: flex; align-items: flex-end; padding: 4px; gap: 1px; }
+  .mock-bar { background: rgba(11,124,131,0.4); border-radius: 2px 2px 0 0; flex: 1; }
+  .mock-band { background: rgba(11,124,131,0.15); border-radius: 2px 2px 0 0; flex: 1; position: relative; }
+  .mock-band::after { content: ''; display: block; background: #0b7c83; border-radius: 1px; height: 2px; position: absolute; bottom: 30%; left: 0; right: 0; }
+  .mock-scenario-row { display: flex; gap: 4px; padding: 0 6px 6px; }
+  .mock-scenario-card { flex: 1; background: #1a2e2b; border-radius: 5px; padding: 6px; border-left: 3px solid; }
+  .mock-scenario-card .sc-name { font-size: 9px; font-weight: bold; color: #ccc; }
+  .mock-scenario-card .sc-val { font-size: 13px; font-weight: bold; margin: 2px 0; }
+  .mock-scenario-card .sc-delta { font-size: 9px; }
+  .mock-fab { position: absolute; bottom: 8px; right: 8px; background: #b95b35; color: white; border-radius: 6px; padding: 5px 10px; font-size: 10px; font-weight: bold; }
+  .mock-run-btn { background: #b95b35; color: white; border-radius: 5px; padding: 4px 10px; font-size: 9px; font-weight: bold; text-align: center; margin: 4px 6px 6px; cursor: pointer; }
+  .split-row { display: flex; gap: 4px; padding: 0 6px; }
+  .split-row .left { flex: 1.5; }
+  .split-row .right { flex: 1; }
+</style>
+
+<h2>Visitor Dashboard: How should the content be arranged?</h2>
+<p class="subtitle">All three layouts use the same data: world map with ship route + case heatmap, forecast timeseries with confidence bands, scenario comparison cards, and 4 KPI metrics. The question is hierarchy and flow.</p>
+
+<div class="cards">
+
+  <div class="card" data-choice="a" onclick="toggleSelect(this)">
+    <div class="card-image">
+      <div class="mock-dash" style="position:relative">
+        <div class="mock-topbar"><span class="mock-topbar-left">EOSP · MV HONDIUS HANTAVIRUS · SITUATION REPORT</span><span class="mock-topbar-right">v1.4.2 · LIVE</span></div>
+        <div class="mock-metrics">
+          <div class="mock-kpi"><div class="lbl">Confirmed</div><div class="val">3</div><div class="sub">+0 today</div></div>
+          <div class="mock-kpi"><div class="lbl">Suspected</div><div class="val">5</div><div class="sub">4 countries</div></div>
+          <div class="mock-kpi"><div class="lbl">Deaths</div><div class="val">3</div><div class="sub">CFR 37%</div></div>
+          <div class="mock-kpi"><div class="lbl">14-day forecast</div><div class="val" style="color:#d89c22">13</div><div class="sub">95% CI: 7–22</div></div>
+        </div>
+        <!-- Full-width hero map -->
+        <div style="padding: 0 6px 6px">
+          <div class="mock-map" style="height:90px">
+            <div class="mock-map-bg" style="height:100%">
+              <div class="mock-map-label">🗺 WORLD MAP · Ship route · Case heatmap · Flight paths · Risk zones</div>
+            </div>
+            <div class="mock-map-dot" style="top:52%;left:22%;background:#d89c22;border-color:#b07a10"></div>
+            <div class="mock-map-dot" style="top:60%;left:52%;background:#b95b35;border-color:#8a3a1e"></div>
+            <div class="mock-map-dot" style="top:35%;left:48%;background:#0b7c83;border-color:#065f67"></div>
+            <div class="mock-map-dot" style="top:35%;left:50%;background:#0b7c83;border-color:#065f67"></div>
+          </div>
+        </div>
+        <!-- Forecast chart + scenarios side by side -->
+        <div class="split-row">
+          <div class="left">
+            <div class="mock-chart-area" style="height:80px">
+              <div class="chart-title">Baseline Forecast · Cumulative cases · 95% CI band</div>
+              <div class="mock-chart-inner">
+                <div class="mock-band" style="height:20%"></div><div class="mock-band" style="height:30%"></div><div class="mock-band" style="height:38%"></div><div class="mock-band" style="height:45%"></div><div class="mock-band" style="height:52%"></div><div class="mock-band" style="height:58%"></div><div class="mock-band" style="height:65%"></div><div class="mock-band" style="height:72%"></div><div class="mock-band" style="height:78%"></div><div class="mock-band" style="height:83%"></div><div class="mock-band" style="height:88%"></div><div class="mock-band" style="height:92%"></div><div class="mock-band" style="height:96%"></div><div class="mock-band" style="height:100%"></div>
+              </div>
+            </div>
+          </div>
+          <div class="right" style="display:flex;flex-direction:column;gap:4px">
+            <div class="mock-scenario-card" style="border-color:#0b7c83"><div class="sc-name">BASELINE</div><div class="sc-val" style="color:#d89c22">13</div><div class="sc-delta" style="color:#6b9990">Reference</div></div>
+            <div class="mock-scenario-card" style="border-color:#2f7d4f"><div class="sc-name">QUARANTINE NOW</div><div class="sc-val" style="color:#2f7d4f">5</div><div class="sc-delta" style="color:#2f7d4f">↓ 62%</div></div>
+            <div class="mock-scenario-card" style="border-color:#b95b35"><div class="sc-name">DELAY +7 DAYS</div><div class="sc-val" style="color:#b95b35">20</div><div class="sc-delta" style="color:#b95b35">↑ 54%</div></div>
+          </div>
+        </div>
+        <div class="mock-run-btn">⚗ Run Analysis →</div>
+      </div>
+    </div>
+    <div class="card-body">
+      <h3>A — Map Hero + Chart + Scenario Sidebar</h3>
+      <p>KPIs at top → full-width world map → forecast timeseries left + scenario cards stacked right. Map is the commanding visual. Scenarios are always visible alongside the chart.</p>
+    </div>
+  </div>
+
+  <div class="card" data-choice="b" onclick="toggleSelect(this)">
+    <div class="card-image">
+      <div class="mock-dash" style="position:relative">
+        <div class="mock-topbar"><span class="mock-topbar-left">EOSP · MV HONDIUS HANTAVIRUS · SITUATION REPORT</span><span class="mock-topbar-right">v1.4.2 · LIVE</span></div>
+        <!-- Split hero: map left, chart right -->
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:4px;padding:6px 6px 0">
+          <div class="mock-map" style="height:110px">
+            <div class="mock-map-bg" style="height:100%">
+              <div class="mock-map-label">🗺 World Map · Ship + Cases</div>
+            </div>
+            <div class="mock-map-dot" style="top:52%;left:22%;background:#d89c22;border-color:#b07a10"></div>
+            <div class="mock-map-dot" style="top:60%;left:62%;background:#b95b35;border-color:#8a3a1e"></div>
+          </div>
+          <div class="mock-chart-area" style="height:110px">
+            <div class="chart-title">Forecast · 14-day · 95% CI</div>
+            <div class="mock-chart-inner" style="height:75px">
+              <div class="mock-band" style="height:20%"></div><div class="mock-band" style="height:30%"></div><div class="mock-band" style="height:42%"></div><div class="mock-band" style="height:52%"></div><div class="mock-band" style="height:60%"></div><div class="mock-band" style="height:68%"></div><div class="mock-band" style="height:76%"></div><div class="mock-band" style="height:82%"></div><div class="mock-band" style="height:88%"></div><div class="mock-band" style="height:93%"></div><div class="mock-band" style="height:97%"></div><div class="mock-band" style="height:100%"></div>
+            </div>
+          </div>
+        </div>
+        <!-- KPIs below hero -->
+        <div class="mock-metrics" style="padding:6px">
+          <div class="mock-kpi"><div class="lbl">Confirmed</div><div class="val">3</div></div>
+          <div class="mock-kpi"><div class="lbl">Suspected</div><div class="val">5</div></div>
+          <div class="mock-kpi"><div class="lbl">Deaths</div><div class="val">3</div></div>
+          <div class="mock-kpi"><div class="lbl">14-day est.</div><div class="val" style="color:#d89c22">13</div></div>
+        </div>
+        <!-- Scenario cards horizontal -->
+        <div class="mock-scenario-row">
+          <div class="mock-scenario-card" style="border-color:#0b7c83"><div class="sc-name">BASELINE</div><div class="sc-val" style="color:#d89c22">13</div><div class="sc-delta" style="color:#6b9990">Reference</div></div>
+          <div class="mock-scenario-card" style="border-color:#2f7d4f"><div class="sc-name">QUARANTINE</div><div class="sc-val" style="color:#2f7d4f">5</div><div class="sc-delta" style="color:#2f7d4f">↓ 62%</div></div>
+          <div class="mock-scenario-card" style="border-color:#b95b35"><div class="sc-name">DELAY +7d</div><div class="sc-val" style="color:#b95b35">20</div><div class="sc-delta" style="color:#b95b35">↑ 54%</div></div>
+          <div class="mock-scenario-card" style="border-color:#6b9990"><div class="sc-name">ENHANCED DST</div><div class="sc-val" style="color:#9ccac6">9</div><div class="sc-delta" style="color:#6b9990">↓ 31%</div></div>
+        </div>
+        <div class="mock-run-btn">⚗ Run Analysis →</div>
+      </div>
+    </div>
+    <div class="card-body">
+      <h3>B — Split Hero + Horizontal Scenario Row</h3>
+      <p>Map and chart sit side-by-side as equal heroes. KPIs below. Scenario cards in a horizontal row at the bottom. Gives map and chart equal billing. Compact vertical footprint.</p>
+    </div>
+  </div>
+
+  <div class="card" data-choice="c" onclick="toggleSelect(this)">
+    <div class="card-image">
+      <div class="mock-dash" style="position:relative">
+        <div class="mock-topbar"><span class="mock-topbar-left">EOSP · MV HONDIUS HANTAVIRUS · SITUATION REPORT</span><span class="mock-topbar-right">v1.4.2 · LIVE</span></div>
+        <div class="mock-metrics" style="padding:5px">
+          <div class="mock-kpi"><div class="lbl">Confirmed Cases</div><div class="val">3</div><div class="sub">+0 today</div></div>
+          <div class="mock-kpi"><div class="lbl">Suspected Cases</div><div class="val">5</div><div class="sub">4 countries</div></div>
+          <div class="mock-kpi"><div class="lbl">Deaths · CFR</div><div class="val">3</div><div class="sub">37%</div></div>
+          <div class="mock-kpi"><div class="lbl">Forecast Day 14</div><div class="val" style="color:#d89c22">13</div><div class="sub">CI 7–22 cases</div></div>
+        </div>
+        <!-- Full-width chart first -->
+        <div style="padding:0 6px 4px">
+          <div class="mock-chart-area" style="height:68px">
+            <div class="chart-title">Baseline Forecast · Cumulative cases · 14-day horizon · 50% + 95% credible interval bands</div>
+            <div class="mock-chart-inner" style="height:48px">
+              <div class="mock-band" style="height:20%"></div><div class="mock-band" style="height:30%"></div><div class="mock-band" style="height:38%"></div><div class="mock-band" style="height:46%"></div><div class="mock-band" style="height:54%"></div><div class="mock-band" style="height:61%"></div><div class="mock-band" style="height:68%"></div><div class="mock-band" style="height:74%"></div><div class="mock-band" style="height:80%"></div><div class="mock-band" style="height:85%"></div><div class="mock-band" style="height:90%"></div><div class="mock-band" style="height:94%"></div><div class="mock-band" style="height:97%"></div><div class="mock-band" style="height:100%"></div>
+            </div>
+          </div>
+        </div>
+        <!-- Then world map -->
+        <div style="padding:0 6px 4px">
+          <div class="mock-map" style="height:75px">
+            <div class="mock-map-bg" style="height:100%">
+              <div class="mock-map-label">🗺 WORLD MAP · Ship position · Case density heatmap · Evacuation flight arcs · Risk zones by country</div>
+            </div>
+            <div class="mock-map-dot" style="top:52%;left:22%;background:#d89c22;border-color:#b07a10"></div>
+            <div class="mock-map-dot" style="top:63%;left:52%;background:#b95b35;border-color:#8a3a1e"></div>
+          </div>
+        </div>
+        <!-- Scenario cards -->
+        <div class="mock-scenario-row" style="padding:0 6px 6px">
+          <div class="mock-scenario-card" style="border-color:#0b7c83"><div class="sc-name">BASELINE</div><div class="sc-val" style="color:#d89c22">13</div></div>
+          <div class="mock-scenario-card" style="border-color:#2f7d4f"><div class="sc-name">QUARANTINE</div><div class="sc-val" style="color:#2f7d4f">5</div><div class="sc-delta" style="color:#2f7d4f">↓ 62%</div></div>
+          <div class="mock-scenario-card" style="border-color:#b95b35"><div class="sc-name">DELAY +7d</div><div class="sc-val" style="color:#b95b35">20</div><div class="sc-delta" style="color:#b95b35">↑ 54%</div></div>
+          <div class="mock-scenario-card" style="border-color:#6b9990"><div class="sc-name">ENHANCED DST</div><div class="sc-val" style="color:#9ccac6">9</div></div>
+        </div>
+        <div class="mock-run-btn">⚗ Run Analysis →</div>
+      </div>
+    </div>
+    <div class="card-body">
+      <h3>C — KPIs → Chart → Map → Scenarios (stacked)</h3>
+      <p>Linear scroll: numbers first → what they mean (chart) → where it's happening (map) → what could change it (scenarios). Narrative hierarchy tells the story top-to-bottom.</p>
+    </div>
+  </div>
+
+</div>

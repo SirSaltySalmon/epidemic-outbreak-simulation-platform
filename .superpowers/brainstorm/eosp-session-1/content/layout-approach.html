@@ -1,0 +1,42 @@
+<h2>Dashboard Structure: How should the two user modes work?</h2>
+<p class="subtitle">You described two audiences: a <strong>visitor</strong> who sees cached results without triggering compute, and a <strong>researcher</strong> who can run live forecasts and observe the model as it executes. How should the UI separate these?</p>
+
+<div class="options">
+
+  <div class="option" data-choice="a" onclick="toggleSelect(this)">
+    <div class="letter">A</div>
+    <div class="content">
+      <h3>Mode Toggle at the top</h3>
+      <p>One URL, two faces. A prominent switch in the header — <strong>"Situation Report"</strong> vs <strong>"Researcher Console"</strong> — instantly swaps the entire interface. Visitor mode is the default and shows only pre-cached data. Researcher mode reveals the live run panel, inference console, and parameter controls. No routing, no login wall.</p>
+      <div class="pros-cons">
+        <div class="pros"><h4>Strengths</h4><ul><li>Single shareable URL</li><li>Smooth progressive disclosure</li><li>Researcher mode feels "unlocked" not separate</li></ul></div>
+        <div class="cons"><h4>Tradeoffs</h4><ul><li>Researchers always start in visitor view</li><li>Mode state lost on refresh</li></ul></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="option" data-choice="b" onclick="toggleSelect(this)">
+    <div class="letter">B</div>
+    <div class="content">
+      <h3>Tabbed Application with Role-gated Tabs</h3>
+      <p>Four persistent tabs across the top: <strong>Situation</strong> · <strong>Scenarios</strong> · <strong>Model Intelligence</strong> · <strong>Researcher Console</strong>. The first three are always visible. The fourth tab is either locked (shows a lock icon) or auto-unlocked. Each tab is its own focused view with its own visualisations.</p>
+      <div class="pros-cons">
+        <div class="pros"><h4>Strengths</h4><ul><li>Matches the PRD's 4-tab spec exactly</li><li>Clear navigation mental model</li><li>Each view can be deep-linked</li></ul></div>
+        <div class="cons"><h4>Tradeoffs</h4><ul><li>Researcher Console tab could feel tacked-on</li><li>Users may miss what's on other tabs</li></ul></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="option" data-choice="c" onclick="toggleSelect(this)">
+    <div class="letter">C</div>
+    <div class="content">
+      <h3>Landing Dashboard + Side Drawer for Researchers</h3>
+      <p>The main page is a rich, always-visible <strong>outbreak intelligence dashboard</strong> — world map, forecast chart, scenario cards — all fully rendered from cache. A persistent <strong>"Run Analysis →"</strong> button/panel on the right edge slides out a researcher drawer overlay with the inference console, live simulation progress, and parameter controls.</p>
+      <div class="pros-cons">
+        <div class="pros"><h4>Strengths</h4><ul><li>Visitor experience is premium and uncluttered</li><li>Researcher tools don't pollute the main view</li><li>Drawer can show live progress without navigating away</li></ul></div>
+        <div class="cons"><h4>Tradeoffs</h4><ul><li>Drawer UX can feel cramped on smaller screens</li><li>Researcher workflow split across two surfaces</li></ul></div>
+      </div>
+    </div>
+  </div>
+
+</div>

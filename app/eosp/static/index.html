@@ -1,0 +1,134 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>EOSP Situation Report</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <header class="topbar">
+      <div>
+        <p class="eyebrow">Epidemic Outbreak Simulation Platform</p>
+        <h1>Outbreak Situation</h1>
+      </div>
+      <div class="version" id="versionBadge">Loading model...</div>
+    </header>
+
+    <main>
+      <section class="metrics" aria-label="Key metrics">
+        <article>
+          <span>Confirmed Cases</span>
+          <strong id="confirmedCases">-</strong>
+        </article>
+        <article>
+          <span>Suspected Cases</span>
+          <strong id="suspectedCases">-</strong>
+        </article>
+        <article>
+          <span>Confirmed Deaths</span>
+          <strong id="deaths">-</strong>
+        </article>
+        <article>
+          <span>14-Day Estimate</span>
+          <strong id="estimate">-</strong>
+        </article>
+      </section>
+
+      <section class="workspace">
+        <div class="panel chart-panel">
+          <div class="panel-heading">
+            <h2>Baseline Forecast</h2>
+            <span id="updatedAt">Updating...</span>
+          </div>
+          <div class="chart" id="forecastChart"></div>
+        </div>
+
+        <aside class="panel">
+          <h2>Scenario Comparison</h2>
+          <button class="run-button" id="runForecastsButton" type="button">Run Forecasts</button>
+          <div class="scenario-list" id="scenarioList"></div>
+          <div class="run-list" id="forecastRunList"></div>
+        </aside>
+      </section>
+
+      <section class="panel intake-panel">
+        <div class="panel-heading">
+          <h2>Case Intake</h2>
+          <span id="intakeStatus">Ready</span>
+        </div>
+        <form id="caseForm" class="case-form">
+          <label>
+            Patient ID
+            <input name="patient_identifier" value="anon_local_case" required />
+          </label>
+          <label>
+            Onset
+            <input name="symptom_onset_date" type="date" value="2026-05-01" required />
+          </label>
+          <label>
+            Hospitalized
+            <input name="hospitalization_date" type="date" value="2026-05-03" />
+          </label>
+          <label>
+            Country
+            <input name="location_country" maxlength="2" value="ES" required />
+          </label>
+          <label>
+            Airport
+            <input name="location_airport_code" maxlength="3" value="TFN" />
+          </label>
+          <label>
+            Status
+            <select name="confirmed_or_suspected">
+              <option value="suspected">Suspected</option>
+              <option value="confirmed">Confirmed</option>
+            </select>
+          </label>
+          <label>
+            Lab
+            <select name="lab_test_result">
+              <option value="not_tested">Not tested</option>
+              <option value="PCR_positive">PCR positive</option>
+              <option value="PCR_negative">PCR negative</option>
+              <option value="serology_positive">Serology positive</option>
+            </select>
+          </label>
+          <label>
+            Source
+            <select name="data_source">
+              <option value="Manual_Form">Manual form</option>
+              <option value="WHO_DON">WHO DON</option>
+              <option value="Contact_Trace_DB">Contact trace DB</option>
+            </select>
+          </label>
+          <button type="submit">Submit Case</button>
+        </form>
+      </section>
+
+      <section class="panel table-panel">
+        <div class="panel-heading">
+          <h2>Case Records</h2>
+          <span>Validation queue threshold: 0.75</span>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Case ID</th>
+                <th>Onset</th>
+                <th>Country</th>
+                <th>Status</th>
+                <th>Lab</th>
+                <th>Score</th>
+              </tr>
+            </thead>
+            <tbody id="caseRows"></tbody>
+          </table>
+        </div>
+      </section>
+    </main>
+
+    <script src="/app.js"></script>
+  </body>
+</html>

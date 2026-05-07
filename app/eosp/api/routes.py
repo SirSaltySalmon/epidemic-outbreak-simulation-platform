@@ -22,6 +22,8 @@ from eosp.services.forecast import (
 )
 from eosp.services.scenarios import SCENARIO_CONFIG
 
+_SSE_POLL_INTERVAL_SECONDS = 0.5
+
 router = APIRouter()
 
 
@@ -186,11 +188,15 @@ async def job_events_stream(job_id: str, request: Request):
             for event in events:
                 yield f"data: {json.dumps(event)}\n\n"
             record = jobs.get_status(job_id)
-            if record is not None and record.status in ("completed", "failed"):
+            if record is None:
+                break
+            if record.status in ("completed", "failed"):
+                for tail_event in jobs.drain_events(job_id):
+                    yield f"data: {json.dumps(tail_event)}\n\n"
                 yield f"data: {json.dumps({'stage': 'complete', 'status': record.status, 'detail': record.detail})}\n\n"
                 break
-            await asyncio.sleep(0.5)
-        yield "data: {\"type\": \"close\"}\n\n"
+            await asyncio.sleep(_SSE_POLL_INTERVAL_SECONDS)
+        yield f"data: {json.dumps({'type': 'close'})}\n\n"
 
     return StreamingResponse(
         generate(),

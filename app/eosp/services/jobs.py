@@ -33,6 +33,8 @@ JOB_REFIT = "refit"
 JOB_ENSEMBLE = "ensemble"
 JOB_FULL_REFRESH = "full_refresh"
 
+_PROGRESS_EVENT_BUFFER_SIZE = 200  # bounded ring buffer; SSE drains ~every 500ms
+
 
 @dataclass
 class JobRecord:
@@ -46,15 +48,19 @@ class JobRecord:
     detail: dict[str, Any] = field(default_factory=dict)
     error: str | None = None
     progress_events: collections.deque = field(
-        default_factory=lambda: collections.deque(maxlen=200)
+        default_factory=lambda: collections.deque(maxlen=_PROGRESS_EVENT_BUFFER_SIZE)
     )
 
-    def push_event(self, event: dict) -> None:
+    def push_event(self, event: dict[str, Any]) -> None:
         self.progress_events.append(event)
 
-    def drain_events(self) -> list[dict]:
-        events = list(self.progress_events)
-        self.progress_events.clear()
+    def drain_events(self) -> list[dict[str, Any]]:
+        events: list[dict[str, Any]] = []
+        while True:
+            try:
+                events.append(self.progress_events.popleft())
+            except IndexError:
+                break
         return events
 
     def to_dict(self) -> dict[str, Any]:
@@ -130,12 +136,12 @@ class JobManager:
     def list_recent(self, limit: int = 20) -> list[JobRecord]:
         return sorted(self._jobs.values(), key=lambda record: record.scheduled_at, reverse=True)[:limit]
 
-    def push_event(self, job_id: str, event: dict) -> None:
+    def push_event(self, job_id: str, event: dict[str, Any]) -> None:
         record = self._jobs.get(job_id)
         if record is not None:
             record.push_event(event)
 
-    def drain_events(self, job_id: str) -> list[dict]:
+    def drain_events(self, job_id: str) -> list[dict[str, Any]]:
         record = self._jobs.get(job_id)
         if record is None:
             return []

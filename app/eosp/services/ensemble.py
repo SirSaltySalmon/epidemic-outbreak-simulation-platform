@@ -15,7 +15,7 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 from time import perf_counter
-from typing import Callable, Iterable, Mapping
+from typing import Callable, Iterable, Mapping, cast
 
 import numpy as np
 
@@ -239,7 +239,7 @@ def _run_trajectories(
     from concurrent.futures import as_completed
 
     workers = max_workers or min(8, max(1, (os.cpu_count() or 4)))
-    results = [None] * n_simulations
+    results: list[Trajectory | None] = [None] * n_simulations
     completed_count = 0
     last_reported = 0
     with ThreadPoolExecutor(max_workers=workers) as pool:
@@ -259,13 +259,15 @@ def _run_trajectories(
                     "scenario": scenario_name,
                     "fan_sample": _sample_fan(done_so_far, n_days=n_days, k=10),
                 })
-    return results
+    return cast(list[Trajectory], results)
 
 
 def _sample_fan(trajectories: list[Trajectory], n_days: int, k: int = 10) -> list[list[float]]:
     """Return k randomly sampled cumulative-case arrays for the fan-chart."""
     if not trajectories:
         return []
+    # Fixed seed: keeps the fan-chart sample stable as more trajectories complete
+    # during a single run, so the SSE consumer sees a coherent set of curves.
     rng = np.random.default_rng(42)
     chosen = rng.choice(len(trajectories), size=min(k, len(trajectories)), replace=False)
     return [trajectories[i].cumulative_cases[1:].tolist() for i in chosen]

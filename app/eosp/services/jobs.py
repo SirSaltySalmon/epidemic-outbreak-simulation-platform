@@ -196,7 +196,7 @@ class JobManager:
             )
         except RuntimeError as exc:
             record.detail["inference_error"] = str(exc)
-            logger.warning("Inference unavailable, falling back: %s", exc)
+            logger.warning("Inference unavailable, falling back to existing posterior: %s", exc)
             artifacts = None
 
         if artifacts is not None:

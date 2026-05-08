@@ -1,78 +1,68 @@
-import os
-
-os.environ.setdefault("EOSP_DISABLE_STARTUP_REFIT", "1")
-
 from fastapi.testclient import TestClient
 import pytest
 
+from eosp.core.repository import InMemoryRepository
+from eosp.core.seed_data import ALERTS, CASES, INFERENCES, VALIDATIONS
 from eosp.main import app
-from eosp.scripts.seed_dev_data import main as seed_dev_data
-from eosp.services.forecast import _FORECAST_CACHE, prewarm_forecast_cache
+from eosp.services.forecast import _FORECAST_CACHE
 
 
 client = TestClient(app)
 
 
-def _ensure_forecast_cache_populated() -> None:
-    repo = getattr(app.state, "repository", None)
-    if repo is None:
-        return
-    try:
-        inference = repo.latest_inference()
-    except Exception:
-        return
-    try:
-        prewarm_forecast_cache(repo, inference)
-    except Exception:
-        pass
-
-
 def _clear_forecast_cache_everywhere() -> None:
-    """Clear both the in-memory dict cache and any DB-backed forecast cache."""
-
     _FORECAST_CACHE.clear()
     repo = getattr(app.state, "repository", None)
-    if repo is None:
-        return
-    if hasattr(repo, "forecast_cache"):
+    if repo is not None and hasattr(repo, "forecast_cache"):
         repo.forecast_cache.clear()
-    session_factory = getattr(repo, "session_factory", None)
-    if session_factory is not None:
-        try:
-            from eosp.core.tables import ForecastResultRow
 
-            with session_factory() as session:
-                session.query(ForecastResultRow).delete()
-                session.commit()
-        except Exception:
-            pass
+
+def _run_forecasts(*scenarios: str, n_simulations: int = 100) -> None:
+    response = client.post(
+        "/api/v1/forecasts/run",
+        json={
+            "scenarios": list(scenarios),
+            "model_version": "latest",
+            "n_simulations": n_simulations,
+        },
+    )
+    assert response.status_code == 200, response.text
 
 
 @pytest.fixture(autouse=True)
-def reset_dev_database_if_available():
+def reset_app_repository():
     _FORECAST_CACHE.clear()
-    if hasattr(app.state, "repository") and hasattr(app.state.repository, "forecast_cache"):
-        app.state.repository.forecast_cache.clear()
-    try:
-        seed_dev_data()
-    except Exception:
-        pass
-    _ensure_forecast_cache_populated()
+    app.state.repository = InMemoryRepository(
+        cases=list(CASES),
+        validations=dict(VALIDATIONS),
+        inferences=list(INFERENCES),
+        alerts=list(ALERTS),
+    )
+    app.state.db_health = {
+        "storage": "memory",
+        "database_configured": False,
+        "database_reachable": None,
+        "detail": "test repository",
+    }
+    app.state.jobs = None
     yield
     _FORECAST_CACHE.clear()
-    if hasattr(app.state, "repository") and hasattr(app.state.repository, "forecast_cache"):
-        app.state.repository.forecast_cache.clear()
-    try:
-        seed_dev_data()
-    except Exception:
-        pass
-    _ensure_forecast_cache_populated()
+
+
+def test_geo_outbreak_metapop_risk_source():
+    r = client.get("/api/v1/geo/outbreak?risk_model=metapop&metapop_runs=8")
+    assert r.status_code == 200
+    assert r.json()["metadata"].get("risk_source") == "metapop_monte_carlo"
 
 
 def test_health_check():
     response = client.get("/api/v1/health")
     assert response.status_code == 200
-    assert response.json() == {"status": "ok"}
+    data = response.json()
+    assert data["status"] == "ok"
+    assert data.get("storage") in ("memory", "postgres")
+    assert "database_configured" in data
+    assert "database_reachable" in data
 
 
 def test_case_summary_matches_seed_outbreak():
@@ -86,6 +76,7 @@ def test_case_summary_matches_seed_outbreak():
 
 
 def test_forecast_includes_credible_intervals():
+    _run_forecasts("baseline")
     response = client.get("/api/v1/forecasts/baseline")
     assert response.status_code == 200
     payload = response.json()
@@ -94,11 +85,12 @@ def test_forecast_includes_credible_intervals():
     final_cases = payload["forecast"][-1]["cases_cumulative"]
     assert final_cases["ci_95_lower"] <= final_cases["median"] <= final_cases["ci_95_upper"]
     assert 3 <= final_cases["median"] <= 60
-    assert payload["metadata"]["freshness_status"] in {"current", "provisional"}
+    assert payload["metadata"]["freshness_status"] == "current"
     assert payload["metadata"]["posterior_version"] == payload["metadata"]["model_version"]
 
 
 def test_forecast_metadata_carries_inferred_parameters():
+    _run_forecasts("baseline")
     response = client.get("/api/v1/forecasts/baseline")
     payload = response.json()
     parameter_values = payload["metadata"]["parameter_values"]
@@ -107,7 +99,20 @@ def test_forecast_metadata_carries_inferred_parameters():
     assert parameter_values["incubation_mean"] > 0
 
 
+def test_forecast_metadata_geo_buckets_from_abm():
+    _run_forecasts("baseline")
+    response = client.get("/api/v1/forecasts/baseline")
+    assert response.status_code == 200
+    geo = response.json()["metadata"].get("geo_forecast") or {}
+    assert geo.get("metric") == "cumulative_infected"
+    assert "ship" in (geo.get("bucket_order") or [])
+    assert len(geo.get("by_day") or []) == 14
+    last = geo["by_day"][-1]
+    assert "buckets" in last and "ship" in last["buckets"]
+
+
 def test_scenario_comparison_reports_baseline_delta():
+    _run_forecasts("baseline", "quarantine_immediate")
     response = client.get("/api/v1/scenarios/compare?scenarios=baseline,quarantine_immediate")
     assert response.status_code == 200
     scenarios = response.json()["scenarios"]
@@ -184,7 +189,21 @@ def test_forecast_returns_503_when_cache_empty():
     _clear_forecast_cache_everywhere()
     response = client.get("/api/v1/forecasts/baseline")
     assert response.status_code == 503
-    assert "POST" in response.json()["detail"]
+    assert "No simulation results available" in response.json()["detail"]
+
+
+def test_scenario_compare_partial_when_scenario_missing_from_cache():
+    _run_forecasts("baseline")
+    repo = getattr(app.state, "repository", None)
+    if repo is None or not hasattr(repo, "forecast_cache"):
+        pytest.skip("partial compare test requires in-memory forecast_cache")
+    repo.forecast_cache.pop("quarantine_immediate", None)
+    response = client.get("/api/v1/scenarios/compare?scenarios=baseline,quarantine_immediate")
+    assert response.status_code == 200
+    body = response.json()
+    names = [s["name"] for s in body["scenarios"]]
+    assert names == ["baseline"]
+    assert "quarantine_immediate" in body.get("scenarios_unavailable", [])
 
 
 def test_scenario_compare_returns_503_when_cache_empty():

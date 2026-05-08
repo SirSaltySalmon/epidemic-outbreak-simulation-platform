@@ -2,7 +2,7 @@ import asyncio
 import json
 from uuid import UUID
 
-from fastapi import APIRouter, Body, HTTPException, Query, Request, status
+from fastapi import APIRouter, Body, HTTPException, Query, Request, Response, status
 from pydantic import BaseModel, Field, field_validator, model_validator
 from fastapi.responses import StreamingResponse
 
@@ -29,6 +29,14 @@ _SSE_POLL_INTERVAL_SECONDS = 0.5
 router = APIRouter()
 
 
+def _no_simulation_results_detail(scenario: str | None = None) -> str:
+    target = f" for scenario '{scenario}'" if scenario else ""
+    return (
+        f"No simulation results available{target}. "
+        "Open Run Analysis and complete a simulation before loading forecast outputs."
+    )
+
+
 class InferenceRunBody(BaseModel):
     reason: str = Field(default="manual", max_length=500)
     scenarios: list[str] | None = None
@@ -53,25 +61,46 @@ class InferenceRunBody(BaseModel):
 
 
 @router.get("/health")
-def health() -> dict[str, str]:
-    return {"status": "ok"}
+def health(request: Request) -> dict[str, object]:
+    payload: dict[str, object] = {"status": "ok"}
+    db_health = getattr(request.app.state, "db_health", None)
+    if isinstance(db_health, dict):
+        payload["storage"] = db_health.get("storage", "unknown")
+        payload["database_configured"] = db_health.get("database_configured")
+        payload["database_reachable"] = db_health.get("database_reachable")
+        if db_health.get("detail"):
+            payload["storage_detail"] = db_health["detail"]
+    return payload
 
 
 @router.get("/geo/outbreak")
-def geo_outbreak(request: Request):
+def geo_outbreak(
+    request: Request,
+    http_response: Response,
+    risk_model: str = Query(default="legacy"),
+    metapop_runs: int | None = Query(default=None, ge=1, le=5000),
+):
+    http_response.headers["Cache-Control"] = "no-store"
     repo = request.app.state.repository
-    p_transmit = 0.089  # fallback
+    p_transmit = 1.5 / 21.5  # Beta(1.5, 20) prior mean when no posterior yet
     try:
         inference = repo.latest_inference()
+        if inference is not None and "p_transmit" in inference.parameters:
+            p_transmit = float(inference.parameters["p_transmit"].mean)
     except LookupError:
-        inference = None
-    if inference is not None and "p_transmit" in inference.parameters:
-        p_transmit = float(inference.parameters["p_transmit"].mean)
-    return build_outbreak_geo(p_transmit=p_transmit)
+        pass
+    cases = repo.list_cases()
+    return build_outbreak_geo(
+        p_transmit=p_transmit,
+        cases=cases,
+        risk_model=risk_model,
+        metapop_n_runs=metapop_runs,
+    )
 
 
 @router.get("/cases/summary", response_model=CaseSummary)
-def case_summary(request: Request) -> CaseSummary:
+def case_summary(request: Request, http_response: Response) -> CaseSummary:
+    http_response.headers["Cache-Control"] = "no-store"
     confirmed, suspected, deaths, last_updated, sources = request.app.state.repository.case_summary()
     return CaseSummary(
         total_confirmed=confirmed,
@@ -123,39 +152,41 @@ def case_validation(case_id: UUID, request: Request):
 def forecast(
     scenario: str,
     request: Request,
+    http_response: Response,
     model_version: str = "latest",
     include_credible_intervals: bool = True,
 ):
     if scenario not in SCENARIO_CONFIG:
         raise HTTPException(status_code=404, detail=f"Unknown scenario: {scenario}")
     repo = request.app.state.repository
-    inference = repo.get_inference(model_version)
-    if inference is None:
-        raise HTTPException(status_code=404, detail="Model version not found")
+    inference = None
+    require_version_match = model_version != "latest"
+    if require_version_match:
+        inference = repo.get_inference(model_version)
+        if inference is None:
+            raise HTTPException(status_code=404, detail="Model version not found")
 
     try:
-        response = get_cached_forecast(
+        payload = get_cached_forecast(
             scenario,
             repository=repo,
             inference=inference,
-            require_version_match=(model_version != "latest"),
+            require_version_match=require_version_match,
         )
     except ForecastNotCachedError as exc:
         raise HTTPException(
             status_code=503,
-            detail=(
-                f"No forecast cached for scenario '{exc.scenario}'. "
-                "Trigger a run via POST /api/v1/forecasts/run or POST /api/v1/inference/run."
-            ),
+            detail=_no_simulation_results_detail(exc.scenario),
         ) from exc
 
     if not include_credible_intervals:
-        for point in response.forecast:
+        for point in payload.forecast:
             for metric in (point.cases_cumulative, point.cases_new, point.deaths_cumulative):
                 for key in list(metric):
                     if key.startswith("ci_"):
                         del metric[key]
-    return response
+    http_response.headers["Cache-Control"] = "no-store"
+    return payload
 
 
 @router.post("/forecasts/run", response_model=ForecastRunResponse)
@@ -204,7 +235,44 @@ def trigger_inference(
         scenarios=body.scenarios,
         n_simulations=body.n_simulations,
     )
+    # If the pipeline was busy, the conflicting job may finish between our conflict
+    # check and get_active_pipeline_job(), yielding active_job_id null on 409 and a
+    # broken UI that resets without subscribing. Retry once when nobody is active.
+    if job_id is None and jobs.get_active_pipeline_job() is None:
+        job_id = jobs.schedule_full_refresh(
+            reason=body.reason,
+            trigger=TriggerType.MANUAL,
+            scenarios=body.scenarios,
+            n_simulations=body.n_simulations,
+        )
+    if job_id is None:
+        active = jobs.get_active_pipeline_job()
+        active_id = active.job_id if active else None
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "message": "Inference or full refresh already running",
+                "active_job_id": active_id,
+            },
+        )
     return {"job_id": job_id, "status": "scheduled", "reason": body.reason}
+
+
+@router.get("/inference/jobs/active")
+def inference_job_active(request: Request):
+    jobs = getattr(request.app.state, "jobs", None)
+    if jobs is None:
+        return {"job": None}
+    active = jobs.get_active_pipeline_job()
+    return {"job": active.to_dict() if active else None}
+
+
+@router.get("/inference/jobs")
+def list_inference_jobs(request: Request, limit: int = Query(default=20, ge=1, le=100)):
+    jobs = getattr(request.app.state, "jobs", None)
+    if jobs is None:
+        return {"jobs": []}
+    return {"jobs": [record.to_dict() for record in jobs.list_recent(limit=limit)]}
 
 
 @router.get("/inference/jobs/{job_id}")
@@ -251,28 +319,23 @@ async def job_events_stream(job_id: str, request: Request):
     )
 
 
-@router.get("/inference/jobs")
-def list_inference_jobs(request: Request, limit: int = Query(default=20, ge=1, le=100)):
-    jobs = getattr(request.app.state, "jobs", None)
-    if jobs is None:
-        return {"jobs": []}
-    return {"jobs": [record.to_dict() for record in jobs.list_recent(limit=limit)]}
-
-
 @router.get("/inference/versions")
-def inference_versions(request: Request, limit: int = Query(default=10, ge=1, le=50)):
+def inference_versions(request: Request, http_response: Response, limit: int = Query(default=10, ge=1, le=50)):
+    http_response.headers["Cache-Control"] = "no-store"
     versions = []
     for inference in request.app.state.repository.inferences[:limit]:
+        diag = inference.diagnostics
+        rhat = diag.get("rhat") or {}
         versions.append(
             {
                 "version_id": inference.version,
                 "timestamp": inference.timestamp,
                 "trigger": inference.trigger,
                 "n_cases": inference.n_cases,
-                "convergence_status": inference.diagnostics["convergence_status"],
-                "rhat_max": max(inference.diagnostics["rhat"].values()),
-                "divergence_count": inference.diagnostics["divergences"],
-                "data_quality_mean": 0.84,
+                "convergence_status": diag.get("convergence_status", "UNKNOWN"),
+                "rhat_max": max(rhat.values()) if rhat else None,
+                "divergence_count": diag.get("divergences", 0),
+                "data_quality_mean": diag.get("data_quality_mean"),
             }
         )
     return {"versions": versions}
@@ -343,21 +406,23 @@ def hindcast_accuracy(model_version: str = "latest"):
 
 
 @router.get("/scenarios/compare")
-def scenario_comparison(request: Request, scenarios: str = "baseline,quarantine_immediate,evacuation_delay_7d"):
+def scenario_comparison(
+    request: Request,
+    http_response: Response,
+    scenarios: str = "baseline,quarantine_immediate,evacuation_delay_7d",
+):
+    http_response.headers["Cache-Control"] = "no-store"
     scenario_names = [name.strip() for name in scenarios.split(",") if name.strip()]
     unknown = [name for name in scenario_names if name not in SCENARIO_CONFIG]
     if unknown:
         raise HTTPException(status_code=404, detail=f"Unknown scenario(s): {', '.join(unknown)}")
     repo = request.app.state.repository
     try:
-        return compare_scenarios(scenario_names, repo.latest_inference(), repository=repo)
+        return compare_scenarios(scenario_names, repository=repo)
     except ForecastNotCachedError as exc:
         raise HTTPException(
             status_code=503,
-            detail=(
-                f"No forecast cached for scenario '{exc.scenario}'. "
-                "Trigger a run via POST /api/v1/forecasts/run or POST /api/v1/inference/run."
-            ),
+            detail=_no_simulation_results_detail(exc.scenario),
         ) from exc
 
 

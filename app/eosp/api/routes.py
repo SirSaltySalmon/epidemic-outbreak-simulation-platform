@@ -2,7 +2,8 @@ import asyncio
 import json
 from uuid import UUID
 
-from fastapi import APIRouter, HTTPException, Query, Request, status
+from fastapi import APIRouter, Body, HTTPException, Query, Request, status
+from pydantic import BaseModel, Field
 from fastapi.responses import StreamingResponse
 
 from eosp.core.models import (
@@ -26,6 +27,10 @@ from eosp.services.geo import build_outbreak_geo
 _SSE_POLL_INTERVAL_SECONDS = 0.5
 
 router = APIRouter()
+
+
+class InferenceRunBody(BaseModel):
+    reason: str = Field(default="manual", max_length=500)
 
 
 @router.get("/health")
@@ -167,12 +172,15 @@ def forecast_runs(request: Request, limit: int = Query(default=10, ge=1, le=50))
 
 
 @router.post("/inference/run", status_code=status.HTTP_202_ACCEPTED)
-def trigger_inference(request: Request, reason: str = "manual"):
+def trigger_inference(
+    request: Request,
+    body: InferenceRunBody = Body(default_factory=InferenceRunBody),
+):
     jobs = getattr(request.app.state, "jobs", None)
     if jobs is None:
         raise HTTPException(status_code=503, detail="Background job manager unavailable")
-    job_id = jobs.schedule_full_refresh(reason=reason, trigger=TriggerType.MANUAL)
-    return {"job_id": job_id, "status": "scheduled", "reason": reason}
+    job_id = jobs.schedule_full_refresh(reason=body.reason, trigger=TriggerType.MANUAL)
+    return {"job_id": job_id, "status": "scheduled", "reason": body.reason}
 
 
 @router.get("/inference/jobs/{job_id}")

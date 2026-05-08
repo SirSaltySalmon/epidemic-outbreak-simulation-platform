@@ -3,7 +3,7 @@ from pathlib import Path
 import numpy as np
 
 from eosp.services.mobility import load_mobility_schedule
-from eosp.services.metapop import MetapopParams, simulate_metapop_once
+from eosp.services.metapop import MetapopParams, run_ensemble_metapop, simulate_metapop_once
 
 
 def test_simulate_metapop_preserves_nonnegative():
@@ -67,3 +67,43 @@ def test_secondary_hub_gets_infected_mass_without_direct_seed():
     )
     assert traj.E[0, 2] == 0.0 and traj.I[0, 2] == 0.0
     assert traj.E[-1, 2] + traj.I[-1, 2] > 0.05
+
+
+def test_run_ensemble_metapop_percentiles():
+    root = Path(__file__).resolve().parents[1]
+    sched = load_mobility_schedule(root / "app" / "eosp" / "data" / "mobility_weekly_skeleton.json")
+    params = MetapopParams(
+        beta_local=0.35,
+        sigma=0.3,
+        gamma=0.15,
+        travel_frac_exposed=1.0,
+        travel_frac_infectious=1.0,
+    )
+    init_s = np.array([500.0, 8000.0, 7000.0, 6000.0])
+    init_e = np.array([40.0, 0.0, 0.0, 0.0])
+    init_i = np.array([10.0, 0.0, 0.0, 0.0])
+    init_r = np.zeros(4)
+    n_runs = 30
+    out = run_ensemble_metapop(
+        schedule=sched,
+        params=params,
+        init_s=init_s,
+        init_e=init_e,
+        init_i=init_i,
+        init_r=init_r,
+        n_runs=n_runs,
+        rng_seed=7,
+    )
+    assert out["n_runs"] == n_runs
+    assert out["patches"][0]["code"] == sched.patch_ids[0]
+    n_days = sched.n_days
+    for patch in out["patches"]:
+        med = patch["i_median_by_day"]
+        lo = patch["i_p2_5_by_day"]
+        hi = patch["i_p97_5_by_day"]
+        assert len(med) == n_days + 1
+        assert len(lo) == n_days + 1
+        assert len(hi) == n_days + 1
+        for t in range(n_days + 1):
+            assert lo[t] <= med[t] + 1e-9
+            assert med[t] <= hi[t] + 1e-9

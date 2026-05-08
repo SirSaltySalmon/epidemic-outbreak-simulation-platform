@@ -6,12 +6,52 @@
   background: #071410;
   border-bottom: 1px solid var(--panel-border);
   display: flex; align-items: center;
-  padding: 0 24px; gap: 16px;
+  flex-wrap: nowrap;
+  gap: 16px;
+  padding: 0 24px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  overscroll-behavior-x: contain;
+  scrollbar-width: thin;
 }
-.topbar-brand { display: flex; flex-direction: column; gap: 1px; flex: 1; }
-.topbar-brand .eyebrow { color: var(--teal-light); font-size: 0.7rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.08em; }
-.topbar-brand h1 { font-size: 1rem; }
-.topbar-status { color: var(--ink-muted); font-size: 0.78rem; }
+.topbar::-webkit-scrollbar {
+  height: 5px;
+}
+.topbar::-webkit-scrollbar-thumb {
+  background: var(--panel-border);
+  border-radius: 3px;
+}
+.topbar-brand {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 1px;
+  flex: 0 0 auto;
+  min-width: max-content;
+  max-width: none;
+}
+/* Stable two-line title: no wrap, no flex shrink — narrow viewports scroll the bar instead */
+.topbar-brand .eyebrow {
+  color: var(--teal-light);
+  font-size: 0.7rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  line-height: 1.15;
+  white-space: nowrap;
+}
+.topbar-brand h1 {
+  font-size: 1rem;
+  font-weight: 700;
+  line-height: 1.2;
+  white-space: nowrap;
+}
+.topbar-status {
+  color: var(--ink-muted);
+  font-size: 0.78rem;
+  flex-shrink: 0;
+  white-space: nowrap;
+}
 .version-badge {
   border: 1px solid var(--panel-border);
   border-radius: var(--radius-sm);
@@ -19,6 +59,7 @@
   font-size: 0.78rem;
   padding: 4px 10px;
   font-family: monospace;
+  flex-shrink: 0;
 }
 .version-badge.converged { border-color: var(--green-dim); color: #4caf50; }
 .version-badge.warning   { border-color: #5a4a00; color: var(--gold); }
@@ -30,6 +71,7 @@
   padding: 8px 16px;
   font-size: 0.85rem;
   white-space: nowrap;
+  flex-shrink: 0;
 }
 .btn-run-analysis:hover { background: #c96a42; }
 

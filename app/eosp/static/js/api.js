@@ -2,9 +2,24 @@
 
 const BASE = "/api/v1";
 
+/** FastAPI `detail` may be a string, object, or validation error list. */
+function _detailMessage(detail) {
+  if (detail == null) return "";
+  if (typeof detail === "string") return detail;
+  if (Array.isArray(detail)) {
+    return detail
+      .map((e) => (e && typeof e === "object" && "msg" in e ? e.msg : JSON.stringify(e)))
+      .join("; ");
+  }
+  return String(detail);
+}
+
 export async function get(path) {
   const res = await fetch(BASE + path);
-  if (!res.ok) throw new Error(`GET ${path} → ${res.status}`);
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(_detailMessage(err.detail) || `GET ${path} → ${res.status}`);
+  }
   return res.json();
 }
 
@@ -16,7 +31,7 @@ export async function post(path, body) {
   });
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));
-    throw new Error(err.detail || `POST ${path} → ${res.status}`);
+    throw new Error(_detailMessage(err.detail) || `POST ${path} → ${res.status}`);
   }
   return res.json();
 }

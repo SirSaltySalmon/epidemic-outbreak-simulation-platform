@@ -16,7 +16,7 @@
   --red-dim: #5a1e1e;
   --radius: 8px;
   --radius-sm: 5px;
-  --topbar-h: 56px;
+  --topbar-h: 60px;
 }
 
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }

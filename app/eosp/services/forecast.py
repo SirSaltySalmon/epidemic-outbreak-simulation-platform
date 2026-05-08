@@ -10,33 +10,10 @@ from eosp.services.scenarios import SCENARIO_CONFIG
 _NETWORK = build_default_network()
 _FORECAST_CACHE: dict[tuple[str, str, int], ForecastResponse] = {}
 
-
-def prewarm_forecast_cache(repository, inference: InferenceResult, n_simulations: int = 100) -> dict[str, ForecastResponse]:
-    """Run a fast small ensemble for every scenario and store it in the repository cache.
-
-    Called from ``create_app`` so the dashboard's first GET always hits a cache;
-    the heavier 10k-sim ``JobManager`` refresh later overwrites these provisional
-    entries with full-fidelity forecasts.
-    """
-
-    forecasts: dict[str, ForecastResponse] = {}
-    for scenario_name in SCENARIO_CONFIG:
-        forecast = build_forecast(scenario_name, inference, n_simulations=n_simulations)
-        forecast.metadata["freshness_status"] = "provisional"
-        if hasattr(repository, "cache_forecast"):
-            try:
-                repository.cache_forecast(scenario_name, forecast)
-            except Exception:
-                pass
-        forecasts[scenario_name] = forecast
-    return forecasts
-
-
-PROVISIONAL_SIMULATIONS = 100
 FULL_SIMULATIONS = 10000
 
 
-def build_forecast(scenario: str, inference: InferenceResult, n_simulations: int = PROVISIONAL_SIMULATIONS) -> ForecastResponse:
+def build_forecast(scenario: str, inference: InferenceResult, n_simulations: int = FULL_SIMULATIONS) -> ForecastResponse:
     if scenario not in SCENARIO_CONFIG:
         raise KeyError(scenario)
     cache_key = (scenario, inference.version, n_simulations)
@@ -122,11 +99,16 @@ def get_cached_forecast(
     return cached
 
 
-def compare_scenarios(scenarios: list[str], inference: InferenceResult, repository=None) -> ScenarioComparison:
+def compare_scenarios(scenarios: list[str], inference: InferenceResult | None = None, repository=None) -> ScenarioComparison:
     baseline = get_cached_forecast("baseline", repository=repository, inference=inference).forecast[-1]
     items: list[ScenarioComparisonItem] = []
+    unavailable: list[str] = []
     for scenario in scenarios:
-        forecast = get_cached_forecast(scenario, repository=repository, inference=inference).forecast[-1]
+        try:
+            forecast = get_cached_forecast(scenario, repository=repository, inference=inference).forecast[-1]
+        except ForecastNotCachedError:
+            unavailable.append(scenario)
+            continue
         vs_baseline = None
         if scenario != "baseline":
             baseline_cases = max(float(baseline.cases_cumulative["median"]), 1.0)
@@ -151,4 +133,10 @@ def compare_scenarios(scenarios: list[str], inference: InferenceResult, reposito
                 vs_baseline=vs_baseline,
             )
         )
-    return ScenarioComparison(comparison_date=date(2026, 5, 7), scenarios=items)
+    if not items:
+        raise ForecastNotCachedError(scenarios[0] if scenarios else "baseline")
+    return ScenarioComparison(
+        comparison_date=date(2026, 5, 7),
+        scenarios=items,
+        scenarios_unavailable=unavailable,
+    )

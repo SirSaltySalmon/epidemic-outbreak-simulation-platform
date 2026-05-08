@@ -49,6 +49,12 @@ def main() -> None:
                     version=case.version,
                     updated_by=case.updated_by,
                     updated_reason=case.updated_reason,
+                    observation_kind=case.observation_kind.value,
+                    cohort_size=case.cohort_size,
+                    cohort_deaths=case.cohort_deaths,
+                    report_period_start=case.report_period_start,
+                    report_period_end=case.report_period_end,
+                    external_observation_key=case.external_observation_key,
                 )
             )
 

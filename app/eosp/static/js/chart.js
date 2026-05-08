@@ -67,6 +67,29 @@ export function renderForecast(containerId, forecast, prevForecast) {
   }
 
   Plotly.react(containerId, traces, LAYOUT, CONFIG);
+
+  const expl = document.getElementById("chart-explanation");
+  if (expl) {
+    const last = forecast.forecast.at(-1);
+    if (last) {
+      const m = Math.round(last.cases_cumulative.median);
+      const lo = Math.round(last.cases_cumulative.ci_95_lower);
+      const hi = Math.round(last.cases_cumulative.ci_95_upper);
+      expl.textContent = `Day 14 · median ${m} cumulative cases · 95% CI ${lo}–${hi}.`;
+    }
+  }
+}
+
+/** Remove traces so a failed reload does not leave a stale chart. */
+export function purgeForecastChart(containerId) {
+  const el = document.getElementById(containerId);
+  if (el && typeof Plotly !== "undefined") {
+    try {
+      Plotly.purge(el);
+    } catch (_) {
+      /* ignore */
+    }
+  }
 }
 
 export function overlayScenario(containerId, forecast, color) {

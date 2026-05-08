@@ -21,6 +21,10 @@ from typing import Any, Iterable
 
 import numpy as np
 
+from eosp.core.case_statistics import (
+    total_cohort_persons,
+    validation_quality_weighted_mean,
+)
 from eosp.core.models import (
     CaseRecord,
     ConvergenceStatus,
@@ -57,7 +61,7 @@ def daily_onsets_from_cases(cases: Iterable[CaseRecord], start_date: date, n_day
     for case in cases:
         offset = (case.symptom_onset_date - start_date).days
         if 0 <= offset < n_days:
-            counts[offset] += 1
+            counts[offset] += int(case.cohort_size)
     return counts
 
 
@@ -110,11 +114,14 @@ def run_inference(
     elif diagnostics["rhat_max"] > 1.01 or diagnostics["divergences"] > 25:
         convergence = ConvergenceStatus.WARNING
 
+    n_persons = total_cohort_persons(sorted_cases)
+    dq_mean = validation_quality_weighted_mean(sorted_cases)
+
     inference = InferenceResult(
         version=version,
         timestamp=timestamp,
         trigger=trigger,
-        n_cases=len(sorted_cases),
+        n_cases=n_persons,
         parameters=parameter_estimates,
         diagnostics={
             "rhat": diagnostics["rhat"],
@@ -124,6 +131,8 @@ def run_inference(
             "n_warmup": config.num_warmup,
             "n_samples": config.num_samples,
             "n_chains": config.num_chains,
+            "data_quality_mean": dq_mean,
+            "n_observation_rows": len(sorted_cases),
         },
         posterior_download_url=netcdf_path or f"local://posteriors/{version}.nc",
     )
@@ -294,22 +303,22 @@ def _default_posteriors_dir() -> Path:
 
 
 def _format_version(timestamp: datetime, previous: InferenceResult | None) -> str:
-    base = "v1.5.0"
+    base = "v1.0.0"
     if previous is not None:
-        base = _bump_minor(previous.version)
+        base = _bump_patch(previous.version)
     suffix = timestamp.strftime("%Y%m%dT%H%M%SZ")
     return f"{base}-{suffix}"
 
 
-def _bump_minor(version: str) -> str:
+def _bump_patch(version: str) -> str:
     head = version.split("-")[0]
     if not head.startswith("v"):
-        return "v1.5.0"
+        return "v1.0.0"
     parts = head[1:].split(".")
     if len(parts) != 3:
-        return "v1.5.0"
+        return "v1.0.0"
     try:
         major, minor, patch = (int(part) for part in parts)
     except ValueError:
-        return "v1.5.0"
-    return f"v{major}.{minor + 1}.0"
+        return "v1.0.0"
+    return f"v{major}.{minor}.{patch + 1}"

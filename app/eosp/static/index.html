@@ -22,7 +22,10 @@
       <p class="eyebrow">Epidemic Outbreak Simulation Platform</p>
       <h1>MV Hondius · Andes Hantavirus Outbreak</h1>
     </div>
-    <span id="topbar-status" class="topbar-status" aria-live="polite">Loading…</span>
+    <div id="topbar-status-wrap" class="topbar-status-wrap" aria-live="polite">
+      <span id="topbar-status-updated" class="topbar-status-line">Loading…</span>
+      <span id="topbar-status-checked" class="topbar-status-sub"></span>
+    </div>
     <span id="version-badge" class="version-badge" title="Model version"></span>
     <button class="btn-run-analysis" id="btn-open-drawer" type="button" aria-haspopup="dialog">
       ⚗ Run Analysis →
@@ -36,41 +39,42 @@
     <section class="kpi-strip" aria-label="Key outbreak metrics">
       <article class="kpi-card">
         <div class="kpi-label">
-          Confirmed Cases
-          <span class="tip-icon" data-tip="Laboratory-confirmed via PCR or serology. These are certain cases." aria-label="What does confirmed mean?">?</span>
+          Recorded Cases
+          <span class="tip-icon" id="kpi-recorded-tip" data-tip="Loading… Person-equivalent totals: individual rows plus ingested cohort or summary observations (each cohort row counts as cohort_size confirmed/suspected persons)." aria-label="Recorded cases">?</span>
         </div>
         <div class="kpi-value" id="kpi-confirmed">—</div>
         <div class="kpi-sub" id="kpi-confirmed-sub"></div>
       </article>
       <article class="kpi-card">
         <div class="kpi-label">
-          Suspected Cases
-          <span class="tip-icon" data-tip="Clinically consistent with Andes hantavirus but not yet lab-confirmed." aria-label="What does suspected mean?">?</span>
-        </div>
-        <div class="kpi-value" id="kpi-suspected">—</div>
-        <div class="kpi-sub" id="kpi-suspected-sub"></div>
-      </article>
-      <article class="kpi-card">
-        <div class="kpi-label">
           Deaths · CFR
-          <span class="tip-icon" data-tip="Case fatality rate. Andes hantavirus kills 35–50% of confirmed cases in published literature." aria-label="What is CFR?">?</span>
+          <span class="tip-icon" data-tip="Confirmed number of deaths." aria-label="Deaths count">?</span>
         </div>
         <div class="kpi-value" id="kpi-deaths">—</div>
         <div class="kpi-sub" id="kpi-deaths-sub"></div>
       </article>
       <article class="kpi-card">
         <div class="kpi-label">
-          14-day Forecast
-          <span class="tip-icon" data-tip="Median projected cumulative cases at day 14. Run 100 simulations: 95 of them land in the CI range." aria-label="What is the forecast?">?</span>
+          14-day Forecast · Cases
+          <span class="tip-icon" data-tip="Forecasted cumulative infections from the stochastic model (median and uncertainty)." aria-label="Model forecast cases">?</span>
         </div>
         <div class="kpi-value" id="kpi-forecast">—</div>
         <div class="kpi-sub" id="kpi-forecast-sub"></div>
+      </article>
+      <article class="kpi-card">
+        <div class="kpi-label">
+          14-day Forecast · Deaths
+          <span class="tip-icon" data-tip="Forecasted cumulative deaths from the same baseline scenario (median and uncertainty)." aria-label="Model forecast deaths">?</span>
+        </div>
+        <div class="kpi-value" id="kpi-forecast-deaths">—</div>
+        <div class="kpi-sub" id="kpi-forecast-deaths-sub"></div>
       </article>
     </section>
 
     <!-- World map -->
     <section class="map-panel" aria-label="Global outbreak and risk map">
-      <div id="world-map"></div>
+        <div id="world-map"></div>
+        <p class="map-legend" id="map-legend" aria-live="polite"></p>
     </section>
 
     <!-- Forecast chart + scenario sidebar -->
@@ -81,11 +85,24 @@
           <span class="freshness" id="chart-freshness"></span>
         </div>
         <div id="forecast-chart"></div>
+        <p class="chart-explanation" id="chart-explanation" aria-live="polite"></p>
       </div>
       <aside class="scenario-sidebar" id="scenario-sidebar" aria-label="Scenario comparison">
         <!-- populated by scenarios.js -->
       </aside>
     </div>
+
+    <!-- Case registry -->
+    <section class="cases-section" aria-label="Recorded case lines">
+      <div class="cases-panel chart-panel">
+        <div class="panel-heading">
+          <h2>Recorded case lines</h2>
+          <span class="freshness" id="cases-list-count"></span>
+        </div>
+        <p class="cases-empty" id="cases-empty" hidden></p>
+        <div class="cases-scroll" id="cases-scroll" role="list" aria-label="Case rows from the database"></div>
+      </div>
+    </section>
 
   </main>
 

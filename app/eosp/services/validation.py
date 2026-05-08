@@ -1,6 +1,6 @@
 from collections import Counter
 
-from eosp.core.models import CaseRecord, ValidationResult
+from eosp.core.models import CaseRecord, ObservationKind, ValidationResult
 
 
 OFFICIAL_SOURCES = {"WHO_DON", "Contact_Trace_DB"}
@@ -60,6 +60,9 @@ def _temporal_consistency(case: CaseRecord) -> bool:
 
 
 def _duplicate_probability(case: CaseRecord, all_cases: list[CaseRecord]) -> float:
+    if case.observation_kind == ObservationKind.COHORT and case.external_observation_key:
+        n_dup = sum(1 for item in all_cases if item.external_observation_key == case.external_observation_key)
+        return 0.85 if n_dup > 1 else 0.0
     key_counts = Counter((item.patient_identifier, item.symptom_onset_date) for item in all_cases)
     return 0.85 if key_counts[(case.patient_identifier, case.symptom_onset_date)] > 1 else 0.0
 

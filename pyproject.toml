@@ -38,6 +38,9 @@ mobility = [
 [tool.pytest.ini_options]
 pythonpath = ["app"]
 testpaths = ["tests"]
+markers = [
+    "integration: tests that touch network / external services (opt-in)",
+]
 
 [tool.setuptools]
 package-dir = {"" = "app"}

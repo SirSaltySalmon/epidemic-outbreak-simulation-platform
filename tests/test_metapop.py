@@ -84,6 +84,11 @@ def test_run_ensemble_metapop_percentiles():
     init_i = np.array([10.0, 0.0, 0.0, 0.0])
     init_r = np.zeros(4)
     n_runs = 30
+    progress_log: list[dict] = []
+
+    def cb(ev: dict) -> None:
+        progress_log.append(dict(ev))
+
     out = run_ensemble_metapop(
         schedule=sched,
         params=params,
@@ -93,8 +98,12 @@ def test_run_ensemble_metapop_percentiles():
         init_r=init_r,
         n_runs=n_runs,
         rng_seed=7,
+        progress_callback=cb,
     )
     assert out["n_runs"] == n_runs
+    assert progress_log, "progress_callback should fire"
+    assert progress_log[-1]["runs_completed"] == n_runs
+    assert progress_log[-1]["total_runs"] == n_runs
     assert out["patches"][0]["code"] == sched.patch_ids[0]
     n_days = sched.n_days
     for patch in out["patches"]:

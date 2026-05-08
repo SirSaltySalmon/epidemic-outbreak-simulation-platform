@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from time import perf_counter
+from typing import Any, Callable
 
 import numpy as np
 
@@ -192,6 +194,13 @@ def simulate_metapop_once(
     return Trajectory(S=out_S, E=out_E, I=out_I, R=out_R)
 
 
+def _metapop_progress_stride(n_runs: int) -> int:
+    """Emit at most ~25 progress ticks for large runs; every run for tiny ensembles."""
+    if n_runs <= 1:
+        return 1
+    return max(1, min(500, n_runs // 25))
+
+
 def run_ensemble_metapop(
     *,
     schedule: MobilitySchedule,
@@ -202,6 +211,7 @@ def run_ensemble_metapop(
     init_r: np.ndarray,
     n_runs: int,
     rng_seed: int,
+    progress_callback: Callable[[dict[str, Any]], None] | None = None,
 ) -> dict:
     if n_runs < 1:
         raise ValueError("n_runs must be >= 1")
@@ -209,6 +219,8 @@ def run_ensemble_metapop(
     n_patches = len(schedule.patch_ids)
     n_days = schedule.n_days
     stack_I = np.empty((n_runs, n_days + 1, n_patches), dtype=np.float64)
+    stride = _metapop_progress_stride(n_runs)
+    t_start = perf_counter()
 
     for r in range(n_runs):
         ss = np.random.SeedSequence([int(rng_seed), r])
@@ -223,54 +235,16 @@ def run_ensemble_metapop(
             rng=rng,
         )
         stack_I[r] = traj.I
-
-    p_lo, p_med, p_hi = np.percentile(stack_I, [2.5, 50.0, 97.5], axis=0)
-
-    patches: list[dict] = []
-    for p_idx, code in enumerate(schedule.patch_ids):
-        patches.append(
-            {
-                "code": code,
-                "i_median_by_day": p_med[:, p_idx].astype(float).tolist(),
-                "i_p2_5_by_day": p_lo[:, p_idx].astype(float).tolist(),
-                "i_p97_5_by_day": p_hi[:, p_idx].astype(float).tolist(),
-            }
-        )
-
-    return {"patches": patches, "n_runs": int(n_runs)}
-
-
-def run_ensemble_metapop(
-    *,
-    schedule: MobilitySchedule,
-    params: MetapopParams,
-    init_s: np.ndarray,
-    init_e: np.ndarray,
-    init_i: np.ndarray,
-    init_r: np.ndarray,
-    n_runs: int,
-    rng_seed: int,
-) -> dict:
-    if n_runs < 1:
-        raise ValueError("n_runs must be >= 1")
-
-    n_patches = len(schedule.patch_ids)
-    n_days = schedule.n_days
-    stack_I = np.empty((n_runs, n_days + 1, n_patches), dtype=np.float64)
-
-    for r in range(n_runs):
-        ss = np.random.SeedSequence([int(rng_seed), r])
-        rng = np.random.default_rng(ss)
-        traj = simulate_metapop_once(
-            schedule=schedule,
-            params=params,
-            init_s=init_s,
-            init_e=init_e,
-            init_i=init_i,
-            init_r=init_r,
-            rng=rng,
-        )
-        stack_I[r] = traj.I
+        done = r + 1
+        if progress_callback and (done % stride == 0 or done == n_runs):
+            elapsed = perf_counter() - t_start
+            progress_callback(
+                {
+                    "runs_completed": done,
+                    "total_runs": n_runs,
+                    "elapsed_s": round(elapsed, 2),
+                }
+            )
 
     p_lo, p_med, p_hi = np.percentile(stack_I, [2.5, 50.0, 97.5], axis=0)
 

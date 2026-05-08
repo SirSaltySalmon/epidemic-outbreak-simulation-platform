@@ -29,6 +29,12 @@ class CaseRecordRow(Base):
     version: Mapped[int] = mapped_column(Integer, default=1)
     updated_by: Mapped[str] = mapped_column(String(255), default="system")
     updated_reason: Mapped[str] = mapped_column(String(255), default="New_case")
+    observation_kind: Mapped[str] = mapped_column(String(32), default="individual")
+    cohort_size: Mapped[int] = mapped_column(Integer, default=1)
+    cohort_deaths: Mapped[int] = mapped_column(Integer, default=0)
+    report_period_start: Mapped[date | None] = mapped_column(Date, nullable=True)
+    report_period_end: Mapped[date | None] = mapped_column(Date, nullable=True)
+    external_observation_key: Mapped[str | None] = mapped_column(String(128), nullable=True, unique=True)
     active: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
@@ -64,7 +70,7 @@ class InferenceTraceRow(Base):
     __tablename__ = "inference_traces"
 
     trace_id: Mapped[UUID] = mapped_column(primary_key=True)
-    version: Mapped[str] = mapped_column(String(50), unique=True, index=True)
+    version: Mapped[str] = mapped_column(String(128), unique=True, index=True)
     timestamp: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     trigger_type: Mapped[str] = mapped_column(String(32))
     n_cases: Mapped[int] = mapped_column(Integer)
@@ -83,7 +89,9 @@ class ForecastResultRow(Base):
     __tablename__ = "forecast_results"
 
     forecast_id: Mapped[UUID] = mapped_column(primary_key=True)
-    model_version: Mapped[str] = mapped_column(ForeignKey("inference_traces.version"), index=True)
+    # Stored for traceability; intentionally not an FK so forecasts remain readable
+    # after inference rows are pruned and to avoid insert-order failures across backends.
+    model_version: Mapped[str] = mapped_column(String(128), index=True)
     scenario: Mapped[str] = mapped_column(String(100), index=True)
     generated_timestamp: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     forecast_json: Mapped[dict[str, Any]] = mapped_column(JSON)
@@ -114,3 +122,18 @@ class QualityAlertRow(Base):
     issue: Mapped[str] = mapped_column(String(500))
     timestamp: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     recommended_action: Mapped[str] = mapped_column(String(500))
+
+
+class ExternalFeedStateRow(Base):
+    """Last-known fingerprint for polled external sources (e.g. WHO DON hub + per-item).
+
+    ``feed_key`` may be a composite logical id (e.g. ``{base}:hub``, ``{base}:item:2026-DON123``)
+    within ``String(64)``.
+    """
+
+    __tablename__ = "external_feed_state"
+
+    feed_key: Mapped[str] = mapped_column(String(64), primary_key=True)
+    content_fingerprint: Mapped[str] = mapped_column(String(128), nullable=False)
+    last_checked_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    last_changed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

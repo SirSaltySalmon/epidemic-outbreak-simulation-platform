@@ -6,6 +6,9 @@ const BASE = "/api/v1";
 function _detailMessage(detail) {
   if (detail == null) return "";
   if (typeof detail === "string") return detail;
+  if (typeof detail === "object" && detail !== null && "message" in detail && typeof detail.message === "string") {
+    return detail.message;
+  }
   if (Array.isArray(detail)) {
     return detail
       .map((e) => (e && typeof e === "object" && "msg" in e ? e.msg : JSON.stringify(e)))
@@ -15,7 +18,7 @@ function _detailMessage(detail) {
 }
 
 export async function get(path) {
-  const res = await fetch(BASE + path);
+  const res = await fetch(BASE + path, { cache: "no-store" });
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));
     throw new Error(_detailMessage(err.detail) || `GET ${path} → ${res.status}`);
@@ -31,7 +34,11 @@ export async function post(path, body) {
   });
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));
-    throw new Error(_detailMessage(err.detail) || `POST ${path} → ${res.status}`);
+    const msg = _detailMessage(err.detail) || `POST ${path} → ${res.status}`;
+    const e = new Error(msg);
+    e.status = res.status;
+    e.body = err;
+    throw e;
   }
   return res.json();
 }

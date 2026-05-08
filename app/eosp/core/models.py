@@ -5,12 +5,17 @@ from enum import StrEnum
 from typing import Any
 from uuid import UUID, uuid4
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 
 class CaseStatus(StrEnum):
     CONFIRMED = "confirmed"
     SUSPECTED = "suspected"
+
+
+class ObservationKind(StrEnum):
+    INDIVIDUAL = "individual"
+    COHORT = "cohort"
 
 
 class LabResult(StrEnum):
@@ -25,6 +30,7 @@ class TriggerType(StrEnum):
     CRON = "cron"
     ANOMALY = "anomaly"
     MANUAL = "manual"
+    EXTERNAL_FEED = "external_feed"
 
 
 class ConvergenceStatus(StrEnum):
@@ -50,6 +56,12 @@ class CaseRecord(BaseModel):
     version: int = 1
     updated_by: str = "system"
     updated_reason: str = "New_case"
+    observation_kind: ObservationKind = ObservationKind.INDIVIDUAL
+    cohort_size: int = Field(default=1, ge=1)
+    cohort_deaths: int = Field(default=0, ge=0)
+    report_period_start: date | None = None
+    report_period_end: date | None = None
+    external_observation_key: str | None = Field(default=None, max_length=128)
 
 
 class CaseCreate(BaseModel):
@@ -67,6 +79,21 @@ class CaseCreate(BaseModel):
     ingestion_timestamp: datetime | None = None
     updated_by: str = "api"
     updated_reason: str = "New_case"
+    observation_kind: ObservationKind = ObservationKind.INDIVIDUAL
+    cohort_size: int = Field(default=1, ge=1)
+    cohort_deaths: int = Field(default=0, ge=0)
+    report_period_start: date | None = None
+    report_period_end: date | None = None
+    external_observation_key: str | None = Field(default=None, max_length=128)
+
+    @model_validator(mode="after")
+    def _cohort_individual_rules(self) -> CaseCreate:
+        if self.observation_kind == ObservationKind.INDIVIDUAL:
+            if self.cohort_size != 1:
+                raise ValueError("individual observations require cohort_size == 1")
+            if self.cohort_deaths != 0:
+                raise ValueError("individual observations use death_date, not cohort_deaths")
+        return self
 
 
 class CaseIngestionResponse(BaseModel):
@@ -81,6 +108,11 @@ class CaseSummary(BaseModel):
     total_deaths: int
     last_updated: datetime
     data_sources: dict[str, int]
+    external_feed_last_checked_at: datetime | None = None
+    # Baseline scenario, horizon final day (typ. day 14), when a cached forecast exists
+    forecast_deaths_median_14d: float | None = None
+    forecast_deaths_ci_95_lower_14d: float | None = None
+    forecast_deaths_ci_95_upper_14d: float | None = None
 
 
 class ValidationResult(BaseModel):
@@ -153,6 +185,8 @@ class ScenarioComparisonItem(BaseModel):
 class ScenarioComparison(BaseModel):
     comparison_date: date
     scenarios: list[ScenarioComparisonItem]
+    # Requested scenario ids with no cached forecast (partial compare still returns 200).
+    scenarios_unavailable: list[str] = Field(default_factory=list)
 
 
 class QualityAlert(BaseModel):

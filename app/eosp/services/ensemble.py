@@ -15,12 +15,13 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 from time import perf_counter
-from typing import Callable, Iterable, Mapping, cast
+from typing import Any, Callable, Iterable, Mapping, cast
 
 import numpy as np
 
 from eosp.core.models import ForecastPoint, ForecastResponse, InferenceResult
 from eosp.services.abm import SeedState, Trajectory, simulate_trajectory
+from eosp.services.geo_buckets import GEO_BUCKET_METRIC_DETAIL, GEO_BUCKET_METRIC_ID
 from eosp.services.network import ContactNetwork
 from eosp.services.scenarios import ScenarioSpec
 
@@ -76,10 +77,12 @@ def run_ensemble(
 
     elapsed = round(perf_counter() - started_at, 3)
     points = _aggregate_points(trajectories=trajectories, start_date=config.start_date, n_days=config.n_days)
-    response = ForecastResponse(
-        scenario=scenario.name,
-        forecast=points,
-        metadata={
+    geo_forecast = _aggregate_geo_forecast(
+        trajectories=trajectories,
+        start_date=config.start_date,
+        n_days=config.n_days,
+    )
+    metadata: dict[str, Any] = {
             "model_version": inference.version,
             "n_simulations": config.n_simulations,
             "parameter_values": {
@@ -98,7 +101,13 @@ def run_ensemble(
             "engine": "abm_monte_carlo",
             "n_agents": float(scenario_network.n_agents),
             "scenario_modifications": scenario.network_modifications,
-        },
+    }
+    if geo_forecast is not None:
+        metadata["geo_forecast"] = geo_forecast
+    response = ForecastResponse(
+        scenario=scenario.name,
+        forecast=points,
+        metadata=metadata,
     )
     return response
 
@@ -303,6 +312,50 @@ def _aggregate_points(
             )
         )
     return points
+
+
+def _aggregate_geo_forecast(
+    *,
+    trajectories: Iterable[Trajectory],
+    start_date: date,
+    n_days: int,
+) -> dict[str, Any] | None:
+    traj_list = list(trajectories)
+    if not traj_list:
+        return None
+    first = traj_list[0]
+    if not first.geo_bucket_labels or first.bucket_cumulative_infected is None:
+        return None
+    labels = first.geo_bucket_labels
+    try:
+        stacked = np.stack([cast(np.ndarray, t.bucket_cumulative_infected) for t in traj_list])
+    except ValueError:
+        return None
+    # (n_sim, n_days+1, n_buckets)
+    by_day: list[dict[str, Any]] = []
+    for day in range(1, n_days + 1):
+        buckets: dict[str, dict[str, float]] = {}
+        for bi, label in enumerate(labels):
+            day_vals = stacked[:, day, bi]
+            buckets[label] = _percentile_block(day_vals.astype(float), include_50=True)
+        by_day.append(
+            {
+                "day": day,
+                "date": (start_date + timedelta(days=day - 1)).isoformat(),
+                "buckets": buckets,
+            }
+        )
+    return {
+        "bucket_order": list(labels),
+        "metric": GEO_BUCKET_METRIC_ID,
+        "metric_detail": GEO_BUCKET_METRIC_DETAIL,
+        "source": "abm_monte_carlo",
+        "distinct_from": (
+            "risk_heatmap on /geo/outbreak uses OpenSky flight-ring heuristics "
+            "scaled by inferred p_transmit, not these bucket counts."
+        ),
+        "by_day": by_day,
+    }
 
 
 def _percentile_block(values: np.ndarray, include_50: bool) -> dict[str, float]:

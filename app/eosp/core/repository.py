@@ -1,9 +1,12 @@
-from collections import Counter
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
+from typing import Any
 from uuid import UUID
 from uuid import uuid4
 
+from sqlalchemy import func
+
+from eosp.core.case_statistics import case_summary_person_totals
 from eosp.core.models import (
     CaseCreate,
     CaseRecord,
@@ -12,12 +15,15 @@ from eosp.core.models import (
     ForecastRunItem,
     ForecastRunResponse,
     InferenceResult,
+    LabResult,
+    ObservationKind,
     QualityAlert,
     ValidationResult,
 )
 from eosp.core.tables import (
     CaseRecordHistoryRow,
     CaseRecordRow,
+    ExternalFeedStateRow,
     ForecastResultRow,
     InferenceTraceRow,
     QualityAlertRow,
@@ -25,6 +31,13 @@ from eosp.core.tables import (
     ValidationResultRow,
 )
 from eosp.services.validation import validate_case
+
+
+@dataclass(slots=True)
+class _StoredFeed:
+    fingerprint: str
+    last_checked_at: datetime
+    last_changed_at: datetime | None
 
 
 @dataclass
@@ -35,14 +48,20 @@ class InMemoryRepository:
     alerts: list[QualityAlert]
     forecast_runs: list[ForecastRunItem] | None = None
     forecast_cache: dict[str, ForecastResponse] = field(default_factory=dict)
+    external_feed_snapshots: dict[str, _StoredFeed] = field(default_factory=dict)
+    geo_outbreak_cache: dict[str, Any] | None = None
+    geo_outbreak_cache_inference_version: str | None = None
 
     def case_summary(self):
-        confirmed = sum(1 for case in self.cases if case.confirmed_or_suspected == CaseStatus.CONFIRMED)
-        suspected = sum(1 for case in self.cases if case.confirmed_or_suspected == CaseStatus.SUSPECTED)
-        deaths = sum(1 for case in self.cases if case.death_date is not None)
-        last_updated = max((case.ingestion_timestamp for case in self.cases), default=datetime.now(UTC))
-        sources = Counter(case.data_source for case in self.cases)
-        return confirmed, suspected, deaths, last_updated, dict(sources)
+        feed_last = max(
+            (f.last_checked_at for f in self.external_feed_snapshots.values()),
+            default=None,
+        )
+        if not self.cases:
+            return 0, 0, 0, datetime.now(UTC), {}, feed_last
+        confirmed, suspected, deaths, sources = case_summary_person_totals(self.cases)
+        last_updated = max(case.ingestion_timestamp for case in self.cases)
+        return confirmed, suspected, deaths, last_updated, sources, feed_last
 
     def list_cases(self, country: str | None = None, status: CaseStatus | None = None) -> list[CaseRecord]:
         records = self.cases
@@ -73,6 +92,12 @@ class InMemoryRepository:
             validation_score=0,
             updated_by=payload.updated_by,
             updated_reason=payload.updated_reason,
+            observation_kind=payload.observation_kind,
+            cohort_size=payload.cohort_size,
+            cohort_deaths=payload.cohort_deaths,
+            report_period_start=payload.report_period_start,
+            report_period_end=payload.report_period_end,
+            external_observation_key=payload.external_observation_key,
         )
         validation = validate_case(case, [*self.cases, case])
         case.validation_score = validation.quality_score
@@ -82,12 +107,88 @@ class InMemoryRepository:
             self.alerts.append(_alert_for_validation(case, validation))
         return case, validation
 
+    def upsert_external_observation(self, payload: CaseCreate) -> tuple[CaseRecord, ValidationResult, bool]:
+        if not payload.external_observation_key:
+            raise ValueError("upsert_external_observation requires external_observation_key")
+        key_fields = (
+            payload.cohort_size,
+            payload.cohort_deaths,
+            payload.symptom_onset_date,
+            payload.location_country.upper(),
+            payload.confirmed_or_suspected,
+            payload.lab_test_result,
+        )
+        idx = next(
+            (i for i, c in enumerate(self.cases) if c.external_observation_key == payload.external_observation_key),
+            None,
+        )
+        if idx is not None:
+            old = self.cases[idx]
+            old_sig = (
+                old.cohort_size,
+                old.cohort_deaths,
+                old.symptom_onset_date,
+                old.location_country,
+                old.confirmed_or_suspected,
+                old.lab_test_result,
+            )
+            if old_sig == key_fields:
+                val = self.validations.get(old.case_id)
+                assert val is not None
+                return old, val, False
+            kept_id = old.case_id
+        else:
+            kept_id = payload.case_id
+
+        now = datetime.now(UTC)
+        case = CaseRecord(
+            case_id=kept_id,
+            patient_identifier=payload.patient_identifier,
+            symptom_onset_date=payload.symptom_onset_date,
+            hospitalization_date=payload.hospitalization_date,
+            death_date=payload.death_date,
+            location_country=payload.location_country.upper(),
+            location_airport_code=payload.location_airport_code.upper() if payload.location_airport_code else None,
+            confirmed_or_suspected=payload.confirmed_or_suspected,
+            lab_test_result=payload.lab_test_result,
+            contacts=payload.contacts,
+            data_source=payload.data_source,
+            ingestion_timestamp=payload.ingestion_timestamp or now,
+            validation_score=0,
+            updated_by=payload.updated_by,
+            updated_reason=payload.updated_reason,
+            observation_kind=payload.observation_kind,
+            cohort_size=payload.cohort_size,
+            cohort_deaths=payload.cohort_deaths,
+            report_period_start=payload.report_period_start,
+            report_period_end=payload.report_period_end,
+            external_observation_key=payload.external_observation_key,
+            version=(self.cases[idx].version + 1) if idx is not None else 1,
+        )
+        peer_pool = [c for c in self.cases if c.external_observation_key != payload.external_observation_key]
+        validation = validate_case(case, [*peer_pool, case])
+        case.validation_score = validation.quality_score
+
+        if idx is not None:
+            self.cases[idx] = case
+        else:
+            self.cases.append(case)
+        self.validations[case.case_id] = validation
+        if validation.quality_score < 0.75:
+            self.alerts.append(_alert_for_validation(case, validation))
+        return case, validation, True
+
     def latest_inference(self) -> InferenceResult:
+        if not self.inferences:
+            raise LookupError("No inference traces available")
         return self.inferences[0]
 
     def get_inference(self, version: str) -> InferenceResult | None:
         if version == "latest":
-            return self.latest_inference()
+            try:
+                return self.latest_inference()
+            except LookupError:
+                return None
         for inference in self.inferences:
             if inference.version == version:
                 return inference
@@ -112,23 +213,68 @@ class InMemoryRepository:
             return None
         return cached
 
+    def cache_geo_outbreak(self, inference_version: str, payload: dict[str, Any]) -> None:
+        self.geo_outbreak_cache_inference_version = inference_version
+        self.geo_outbreak_cache = payload
+
+    def get_geo_outbreak_cache(
+        self,
+        inference_version: str,
+        *,
+        metapop_runs: int | None = None,
+    ) -> dict[str, Any] | None:
+        if self.geo_outbreak_cache is None or self.geo_outbreak_cache_inference_version != inference_version:
+            return None
+        if metapop_runs is not None:
+            cached_runs = self.geo_outbreak_cache.get("metadata", {}).get("metapop_n_runs")
+            if cached_runs is not None and int(cached_runs) != int(metapop_runs):
+                return None
+        return self.geo_outbreak_cache
+
     def update_inference(self, inference: InferenceResult) -> None:
         self.inferences.insert(0, inference)
+
+    def record_external_feed_poll(
+        self, feed_key: str, fingerprint: str, *, treat_first_poll_as_changed: bool = False
+    ) -> bool:
+        now = datetime.now(UTC)
+        prev = self.external_feed_snapshots.get(feed_key)
+        if prev is None:
+            self.external_feed_snapshots[feed_key] = _StoredFeed(
+                fingerprint=fingerprint,
+                last_checked_at=now,
+                last_changed_at=None,
+            )
+            return bool(treat_first_poll_as_changed)
+        changed = prev.fingerprint != fingerprint
+        self.external_feed_snapshots[feed_key] = _StoredFeed(
+            fingerprint=fingerprint,
+            last_checked_at=now,
+            last_changed_at=now if changed else prev.last_changed_at,
+        )
+        return changed
+
+
+def empty_repository() -> InMemoryRepository:
+    return InMemoryRepository(cases=[], validations={}, inferences=[], alerts=[])
 
 
 @dataclass
 class SqlRepository:
     session_factory: object
+    geo_outbreak_cache: dict[str, Any] | None = field(default=None, repr=False)
+    geo_outbreak_cache_inference_version: str | None = field(default=None, repr=False)
 
     def case_summary(self):
         with self.session_factory() as session:
+            feed_last = session.query(func.max(ExternalFeedStateRow.last_checked_at)).scalar()
             records = session.query(CaseRecordRow).filter(CaseRecordRow.active.is_(True)).all()
-            confirmed = sum(1 for case in records if case.confirmed_or_suspected == CaseStatus.CONFIRMED.value)
-            suspected = sum(1 for case in records if case.confirmed_or_suspected == CaseStatus.SUSPECTED.value)
-            deaths = sum(1 for case in records if case.death_date is not None)
-            last_updated = max((case.ingestion_timestamp for case in records), default=datetime.now(UTC))
-            sources = Counter(case.data_source for case in records)
-            return confirmed, suspected, deaths, last_updated, dict(sources)
+            if not records:
+                return 0, 0, 0, datetime.now(UTC), {}, feed_last
+            models = [_case_from_row(row) for row in records]
+            confirmed, suspected, deaths, sources = case_summary_person_totals(models)
+            last_updated = max(row.ingestion_timestamp for row in records)
+            return confirmed, suspected, deaths, last_updated, sources, feed_last
 
     def list_cases(self, country: str | None = None, status: CaseStatus | None = None) -> list[CaseRecord]:
         with self.session_factory() as session:
@@ -182,6 +328,12 @@ class SqlRepository:
                 validation_score=0,
                 updated_by=payload.updated_by,
                 updated_reason=payload.updated_reason,
+                observation_kind=payload.observation_kind,
+                cohort_size=payload.cohort_size,
+                cohort_deaths=payload.cohort_deaths,
+                report_period_start=payload.report_period_start,
+                report_period_end=payload.report_period_end,
+                external_observation_key=payload.external_observation_key,
             )
             validation = validate_case(case, [*existing_cases, case])
             case.validation_score = validation.quality_score
@@ -223,6 +375,164 @@ class SqlRepository:
             )
             session.commit()
             return case, validation
+
+    def upsert_external_observation(self, payload: CaseCreate) -> tuple[CaseRecord, ValidationResult, bool]:
+        if not payload.external_observation_key:
+            raise ValueError("upsert_external_observation requires external_observation_key")
+
+        def _validation_from_session(sess, case_id: UUID) -> ValidationResult:
+            vrow = (
+                sess.query(ValidationResultRow)
+                .filter(ValidationResultRow.case_id == case_id)
+                .order_by(ValidationResultRow.validation_timestamp.desc())
+                .first()
+            )
+            assert vrow is not None
+            return ValidationResult(
+                case_id=vrow.case_id,
+                checks_passed=vrow.checks_passed,
+                issues=vrow.issues,
+                quality_score=vrow.quality_score,
+                quarantine_status=vrow.quarantine_status,
+            )
+
+        with self.session_factory() as session:
+            row = (
+                session.query(CaseRecordRow)
+                .filter(
+                    CaseRecordRow.external_observation_key == payload.external_observation_key,
+                    CaseRecordRow.active.is_(True),
+                )
+                .first()
+            )
+            peer_rows = [
+                r
+                for r in session.query(CaseRecordRow).filter(CaseRecordRow.active.is_(True)).all()
+                if r.external_observation_key != payload.external_observation_key
+            ]
+            peer_models = [_case_from_row(r) for r in peer_rows]
+
+            old_case: CaseRecord | None = None
+            prev_version = 0
+            if row is not None:
+                old_case = _case_from_row(row)
+                sig_new = (
+                    payload.cohort_size,
+                    payload.cohort_deaths,
+                    payload.symptom_onset_date,
+                    payload.location_country.upper(),
+                    payload.confirmed_or_suspected,
+                    payload.lab_test_result,
+                )
+                sig_old = (
+                    old_case.cohort_size,
+                    old_case.cohort_deaths,
+                    old_case.symptom_onset_date,
+                    old_case.location_country,
+                    old_case.confirmed_or_suspected,
+                    old_case.lab_test_result,
+                )
+                if sig_old == sig_new:
+                    return old_case, _validation_from_session(session, old_case.case_id), False
+                prev_version = old_case.version
+
+            now = datetime.now(UTC)
+            cid = row.case_id if row is not None else payload.case_id
+            if row is None:
+                collision = session.get(CaseRecordRow, cid)
+                if collision is not None:
+                    raise ValueError(f"case_id already exists: {cid}")
+
+            case = CaseRecord(
+                case_id=cid,
+                patient_identifier=payload.patient_identifier,
+                symptom_onset_date=payload.symptom_onset_date,
+                hospitalization_date=payload.hospitalization_date,
+                death_date=payload.death_date,
+                location_country=payload.location_country.upper(),
+                location_airport_code=payload.location_airport_code.upper() if payload.location_airport_code else None,
+                confirmed_or_suspected=payload.confirmed_or_suspected,
+                lab_test_result=payload.lab_test_result,
+                contacts=payload.contacts,
+                data_source=payload.data_source,
+                ingestion_timestamp=payload.ingestion_timestamp or now,
+                validation_score=0,
+                updated_by=payload.updated_by,
+                updated_reason=payload.updated_reason,
+                observation_kind=payload.observation_kind,
+                cohort_size=payload.cohort_size,
+                cohort_deaths=payload.cohort_deaths,
+                report_period_start=payload.report_period_start,
+                report_period_end=payload.report_period_end,
+                external_observation_key=payload.external_observation_key,
+                version=prev_version + 1,
+            )
+            validation = validate_case(case, [*peer_models, case])
+            case.validation_score = validation.quality_score
+
+            if row is None:
+                session.add(_case_to_row(case))
+            else:
+                row.patient_identifier = case.patient_identifier
+                row.symptom_onset_date = case.symptom_onset_date
+                row.hospitalization_date = case.hospitalization_date
+                row.death_date = case.death_date
+                row.location_country = case.location_country
+                row.location_airport_code = case.location_airport_code
+                row.confirmed_or_suspected = case.confirmed_or_suspected.value
+                row.lab_test_result = case.lab_test_result.value
+                row.contacts = case.contacts
+                row.data_source = case.data_source
+                row.ingestion_timestamp = case.ingestion_timestamp
+                row.validation_score = case.validation_score
+                row.version = case.version
+                row.updated_by = case.updated_by
+                row.updated_reason = case.updated_reason
+                row.observation_kind = case.observation_kind.value
+                row.cohort_size = case.cohort_size
+                row.cohort_deaths = case.cohort_deaths
+                row.report_period_start = case.report_period_start
+                row.report_period_end = case.report_period_end
+                row.external_observation_key = case.external_observation_key
+            session.flush()
+            session.add(
+                CaseRecordHistoryRow(
+                    case_id=case.case_id,
+                    case_data_json=case.model_dump(mode="json"),
+                    source=case.data_source,
+                    validation_score=case.validation_score,
+                    change_reason=case.updated_reason,
+                    changed_by=case.updated_by,
+                    parent_version_id=case.version,
+                )
+            )
+            session.add(
+                ValidationResultRow(
+                    validation_id=uuid4(),
+                    case_id=case.case_id,
+                    checks_passed=validation.checks_passed,
+                    issues=validation.issues,
+                    quality_score=validation.quality_score,
+                    quarantine_status=validation.quarantine_status,
+                )
+            )
+            if validation.quality_score < 0.75:
+                session.add(_alert_to_row(_alert_for_validation(case, validation)))
+            session.add(
+                UserActionRow(
+                    user_id=case.updated_by,
+                    action_type="upsert_external_observation",
+                    resource_type="case",
+                    resource_id=str(case.case_id),
+                    details={
+                        "external_observation_key": payload.external_observation_key,
+                        "validation_score": case.validation_score,
+                    },
+                    ip_address=None,
+                )
+            )
+            session.commit()
+            return case, validation, True
 
     def latest_inference(self) -> InferenceResult:
         with self.session_factory() as session:
@@ -296,32 +606,18 @@ class SqlRepository:
     def cache_forecast(self, scenario: str, response: ForecastResponse) -> None:
         model_version = str(response.metadata.get("model_version", "latest"))
         with self.session_factory() as session:
-            row = (
-                session.query(ForecastResultRow)
-                .filter(
-                    ForecastResultRow.model_version == model_version,
-                    ForecastResultRow.scenario == scenario,
-                )
-                .order_by(ForecastResultRow.generated_timestamp.desc())
-                .first()
-            )
             payload = response.model_dump(mode="json")
-            if row is None:
-                session.add(
-                    ForecastResultRow(
-                        forecast_id=uuid4(),
-                        model_version=model_version,
-                        scenario=scenario,
-                        forecast_json=payload,
-                        n_simulations=int(response.metadata.get("n_simulations", 10000)),
-                        execution_time_seconds=float(response.metadata.get("execution_time_seconds", 0.0)),
-                        s3_archive_path=None,
-                    )
+            session.add(
+                ForecastResultRow(
+                    forecast_id=uuid4(),
+                    model_version=model_version,
+                    scenario=scenario,
+                    forecast_json=payload,
+                    n_simulations=int(response.metadata.get("n_simulations", 10000)),
+                    execution_time_seconds=float(response.metadata.get("execution_time_seconds", 0.0)),
+                    s3_archive_path=None,
                 )
-            else:
-                row.forecast_json = payload
-                row.n_simulations = int(response.metadata.get("n_simulations", row.n_simulations))
-                row.execution_time_seconds = float(response.metadata.get("execution_time_seconds", row.execution_time_seconds))
+            )
             session.commit()
 
     def get_cached_forecast(self, scenario: str, model_version: str | None = None) -> ForecastResponse | None:
@@ -333,6 +629,24 @@ class SqlRepository:
             if row is None:
                 return None
             return ForecastResponse.model_validate(row.forecast_json)
+
+    def cache_geo_outbreak(self, inference_version: str, payload: dict[str, Any]) -> None:
+        self.geo_outbreak_cache_inference_version = inference_version
+        self.geo_outbreak_cache = payload
+
+    def get_geo_outbreak_cache(
+        self,
+        inference_version: str,
+        *,
+        metapop_runs: int | None = None,
+    ) -> dict[str, Any] | None:
+        if self.geo_outbreak_cache is None or self.geo_outbreak_cache_inference_version != inference_version:
+            return None
+        if metapop_runs is not None:
+            cached_runs = self.geo_outbreak_cache.get("metadata", {}).get("metapop_n_runs")
+            if cached_runs is not None and int(cached_runs) != int(metapop_runs):
+                return None
+        return self.geo_outbreak_cache
 
     def update_inference(self, inference: InferenceResult) -> None:
         with self.session_factory() as session:
@@ -389,8 +703,34 @@ class SqlRepository:
                 for row in rows
             ]
 
+    def record_external_feed_poll(
+        self, feed_key: str, fingerprint: str, *, treat_first_poll_as_changed: bool = False
+    ) -> bool:
+        now = datetime.now(UTC)
+        with self.session_factory() as session:
+            row = session.get(ExternalFeedStateRow, feed_key)
+            if row is None:
+                session.add(
+                    ExternalFeedStateRow(
+                        feed_key=feed_key,
+                        content_fingerprint=fingerprint,
+                        last_checked_at=now,
+                        last_changed_at=None,
+                    )
+                )
+                session.commit()
+                return bool(treat_first_poll_as_changed)
+            changed = row.content_fingerprint != fingerprint
+            row.content_fingerprint = fingerprint
+            row.last_checked_at = now
+            if changed:
+                row.last_changed_at = now
+            session.commit()
+            return changed
+
 
 def _case_from_row(row: CaseRecordRow) -> CaseRecord:
+    kind_raw = getattr(row, "observation_kind", None) or "individual"
     return CaseRecord(
         case_id=row.case_id,
         patient_identifier=row.patient_identifier,
@@ -400,7 +740,7 @@ def _case_from_row(row: CaseRecordRow) -> CaseRecord:
         location_country=row.location_country,
         location_airport_code=row.location_airport_code,
         confirmed_or_suspected=CaseStatus(row.confirmed_or_suspected),
-        lab_test_result=row.lab_test_result,
+        lab_test_result=LabResult(row.lab_test_result),
         contacts=row.contacts,
         data_source=row.data_source,
         ingestion_timestamp=row.ingestion_timestamp,
@@ -408,6 +748,12 @@ def _case_from_row(row: CaseRecordRow) -> CaseRecord:
         version=row.version,
         updated_by=row.updated_by,
         updated_reason=row.updated_reason,
+        observation_kind=ObservationKind(kind_raw),
+        cohort_size=int(getattr(row, "cohort_size", 1) or 1),
+        cohort_deaths=int(getattr(row, "cohort_deaths", 0) or 0),
+        report_period_start=getattr(row, "report_period_start", None),
+        report_period_end=getattr(row, "report_period_end", None),
+        external_observation_key=getattr(row, "external_observation_key", None),
     )
 
 
@@ -429,6 +775,12 @@ def _case_to_row(case: CaseRecord) -> CaseRecordRow:
         version=case.version,
         updated_by=case.updated_by,
         updated_reason=case.updated_reason,
+        observation_kind=case.observation_kind.value,
+        cohort_size=case.cohort_size,
+        cohort_deaths=case.cohort_deaths,
+        report_period_start=case.report_period_start,
+        report_period_end=case.report_period_end,
+        external_observation_key=case.external_observation_key,
     )
 
 

@@ -6,13 +6,20 @@
 export function subscribe(jobId, onEvent, onClose) {
   const url = `/api/v1/inference/jobs/${jobId}/events`;
   const source = new EventSource(url);
+  let finished = false;
+
+  function finish(event) {
+    if (finished) return;
+    finished = true;
+    source.close();
+    onClose(event);
+  }
 
   source.onmessage = (e) => {
     try {
       const event = JSON.parse(e.data);
       if (event.type === "close" || event.stage === "complete") {
-        onClose(event);
-        source.close();
+        finish(event);
       } else {
         onEvent(event);
       }
@@ -20,9 +27,16 @@ export function subscribe(jobId, onEvent, onClose) {
   };
 
   source.onerror = () => {
-    onClose({ error: true });
-    source.close();
+    // Browsers can fire transient EventSource errors while reconnecting. Only
+    // surface a terminal failure if the stream is actually closed before the
+    // server sent a complete event.
+    if (source.readyState === EventSource.CLOSED) {
+      finish({ status: "failed", error: "Progress stream closed before completion" });
+    }
   };
 
-  return () => source.close();
+  return () => {
+    finished = true;
+    source.close();
+  };
 }

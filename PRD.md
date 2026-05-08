@@ -15,12 +15,13 @@
 - **Real-time parameter inference**: Updates transmission rates as new cases confirm
 - **Scenario-based forecasting**: Model impact of quarantine, evacuation timing, protocol changes
 - **Transparency**: Version-controlled, auditable inference pipeline
-- **Epidemiologist-focused**: Designed for public health decision-makers, not the general public
+- **Epidemiologist-focused**: Optimized for public health decision-makers and researchers; **simulated outputs and interactive visualizations remain publicly available** (no login required for the public exploration tool) so anyone can inspect forecasts, scenarios, and maps with clear labeling that results are model-based simulations.
 
 ### Target Deployment Context
 
 - **Primary users**: National health authorities (UK HSA, South Africa Health, Swiss health ministry, Spanish health authority)
 - **Secondary users**: WHO coordination center, CDC epidemiologists, cruise line operators
+- **Public tool**: Unauthenticated (or broadly open) access to dashboard visualizations and documented APIs for **simulated** case timelines, scenario comparisons, and geographic views—not a substitute for official health reporting, but transparent model output for education and scrutiny alongside researcher-grade exports.
 - **Update cadence**: 12-hour inference cycles + immediate updates on new confirmed cases
 - **Forecast horizon**: 14-day rolling window with 95% credible intervals
 

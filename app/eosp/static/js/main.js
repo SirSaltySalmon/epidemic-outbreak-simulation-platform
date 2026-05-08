@@ -4,9 +4,10 @@
  */
 import { get } from "./api.js";
 import { initMap, renderGeoData } from "./map.js";
-import { renderForecast } from "./chart.js";
-import { renderScenarios } from "./scenarios.js";
-import { initDrawer } from "./drawer.js";
+import { renderForecast, purgeForecastChart } from "./chart.js";
+import { renderScenarios, SCENARIOS_COMPARE_QUERY } from "./scenarios.js";
+import { initDrawer, notifyDrawerOpened } from "./drawer.js";
+import { applyCasesList } from "./cases.js";
 
 async function boot() {
   // Wait for CDN libraries (Leaflet and Plotly use defer, so they may not
@@ -14,32 +15,21 @@ async function boot() {
   await _waitForLibs();
 
   // Parallel data fetch
-  const [summary, forecast, versions, scenarios, geo] = await Promise.allSettled([
+  const [summary, forecast, versions, scenarios, geo, caseLines] = await Promise.allSettled([
     get("/cases/summary"),
     get("/forecasts/baseline"),
     get("/inference/versions?limit=2"),
-    get("/scenarios/compare?scenarios=baseline,quarantine_immediate,evacuation_delay_7d,enhanced_destination_protocols"),
+    get("/scenarios/compare?" + SCENARIOS_COMPARE_QUERY),
     get("/geo/outbreak"),
+    get("/cases"),
   ]);
 
-  // KPI cards
   if (summary.status === "fulfilled") {
-    const s = summary.value;
-    _setText("kpi-confirmed", s.total_confirmed);
-    _setText("kpi-confirmed-sub", `+0 today · ${Object.keys(s.data_sources).length} sources`);
-    _setText("kpi-suspected", s.total_suspected);
-    _setText("kpi-suspected-sub", "PCR pending");
-    _setText("kpi-deaths", s.total_deaths);
-    const cfr = s.total_confirmed > 0
-      ? Math.round((s.total_deaths / (s.total_confirmed)) * 100) + "%"
-      : "—";
-    _setText("kpi-deaths-sub", `CFR ${cfr} · Expected: 35–50%`);
-    const updatedAt = new Date(s.last_updated);
-    _setText("topbar-status", `Updated ${_relativeTime(updatedAt)}`);
+    _applySummaryKpis(summary.value);
     setInterval(async () => {
       try {
         const fresh = await get("/cases/summary");
-        _setText("topbar-status", `Updated ${_relativeTime(new Date(fresh.last_updated))}`);
+        _applySummaryKpis(fresh);
       } catch (_) {}
     }, 60_000);
   }
@@ -54,30 +44,48 @@ async function boot() {
     }
   }
 
-  // Forecast chart
   if (forecast.status === "fulfilled") {
     const prev = versions.status === "fulfilled" && versions.value.versions.length > 1
       ? await get(`/forecasts/baseline?model_version=${versions.value.versions[1].version_id}`).catch(() => null)
       : null;
     renderForecast("forecast-chart", forecast.value, prev);
-    const last = forecast.value.forecast.at(-1);
-    if (last) {
-      _setText("kpi-forecast", last.cases_cumulative.median);
-      _setText("kpi-forecast-sub", `95% CI: ${last.cases_cumulative.ci_95_lower}–${last.cases_cumulative.ci_95_upper} cases`);
-    }
-    _setText("chart-freshness", forecast.value.metadata?.freshness_status === "provisional"
-      ? "Provisional (100 sims)" : "Full fidelity (10k sims)");
+    _applyForecastKpis(
+      forecast.value,
+      summary.status === "fulfilled" ? summary.value : null,
+    );
+    _setText("chart-freshness", _forecastFreshnessLabel(forecast.value));
+  } else {
+    purgeForecastChart("forecast-chart");
+    const msg = forecast.reason instanceof Error ? forecast.reason.message : String(forecast.reason);
+    _setText("chart-freshness", "");
+    _applyForecastKpis(
+      null,
+      summary.status === "fulfilled" ? summary.value : null,
+    );
+    _setText("chart-explanation", msg ? `Forecast not loaded: ${msg}` : "Forecast not loaded.");
   }
 
-  // Scenario cards
+  // Scenario cards (always render shell; partial API responses / failures still show cards)
   if (scenarios.status === "fulfilled") {
     renderScenarios(scenarios.value);
+  } else {
+    const msg = scenarios.reason instanceof Error ? scenarios.reason.message : String(scenarios.reason);
+    renderScenarios(null, { fetchError: msg });
+  }
+
+  if (caseLines.status === "fulfilled") {
+    const rows = caseLines.value;
+    applyCasesList(Array.isArray(rows) ? rows : []);
+  } else {
+    const msg = caseLines.reason instanceof Error ? caseLines.reason.message : String(caseLines.reason);
+    applyCasesList(null, msg);
   }
 
   // World map
   initMap("world-map");
   if (geo.status === "fulfilled") {
-    renderGeoData(geo.value);
+    const gf = forecast.status === "fulfilled" ? forecast.value.metadata?.geo_forecast : null;
+    renderGeoData(geo.value, gf);
   }
 
   // Researcher drawer wiring
@@ -86,20 +94,49 @@ async function boot() {
 }
 
 function _onRunComplete() {
-  // Reload forecast and scenarios after a run finishes
   Promise.allSettled([
+    get("/cases/summary"),
     get("/forecasts/baseline"),
-    get("/scenarios/compare?scenarios=baseline,quarantine_immediate,evacuation_delay_7d,enhanced_destination_protocols"),
+    get("/scenarios/compare?" + SCENARIOS_COMPARE_QUERY),
     get("/inference/versions?limit=2"),
     get("/geo/outbreak"),
-  ]).then(([forecast, scenarios, versions, geo]) => {
-    if (forecast.status === "fulfilled") renderForecast("forecast-chart", forecast.value);
-    if (scenarios.status === "fulfilled") renderScenarios(scenarios.value);
-    if (geo.status === "fulfilled") renderGeoData(geo.value);
+    get("/cases"),
+  ]).then(([summary, forecast, scenarios, versions, geo, caseLines]) => {
+    if (summary.status === "fulfilled") {
+      _applySummaryKpis(summary.value);
+    }
+    if (forecast.status === "fulfilled") {
+      renderForecast("forecast-chart", forecast.value);
+      _applyForecastKpis(forecast.value, summary.status === "fulfilled" ? summary.value : null);
+      _setText("chart-freshness", _forecastFreshnessLabel(forecast.value));
+    } else {
+      purgeForecastChart("forecast-chart");
+      const msg = forecast.reason instanceof Error ? forecast.reason.message : String(forecast.reason);
+      _setText("chart-freshness", "");
+      _applyForecastKpis(null, summary.status === "fulfilled" ? summary.value : null);
+      _setText("chart-explanation", msg ? `Forecast not loaded: ${msg}` : "Forecast not loaded.");
+    }
+    if (scenarios.status === "fulfilled") {
+      renderScenarios(scenarios.value);
+    } else {
+      const msg = scenarios.reason instanceof Error ? scenarios.reason.message : String(scenarios.reason);
+      renderScenarios(null, { fetchError: msg });
+    }
+    if (geo.status === "fulfilled") {
+      const gf = forecast.status === "fulfilled" ? forecast.value.metadata?.geo_forecast : null;
+      renderGeoData(geo.value, gf);
+    }
     if (versions.status === "fulfilled" && versions.value.versions.length) {
       const v = versions.value.versions[0];
       const badge = document.getElementById("version-badge");
       if (badge) badge.textContent = v.version_id;
+    }
+    if (caseLines.status === "fulfilled") {
+      const rows = caseLines.value;
+      applyCasesList(Array.isArray(rows) ? rows : []);
+    } else {
+      const msg = caseLines.reason instanceof Error ? caseLines.reason.message : String(caseLines.reason);
+      applyCasesList(null, msg);
     }
   });
 }
@@ -114,6 +151,7 @@ function _wireDrawerToggle() {
     overlay?.classList.add("open");
     pageBody?.classList.add("dimmed");
     document.getElementById("drawer")?.focus();
+    notifyDrawerOpened();
   });
 
   function close() {
@@ -138,9 +176,84 @@ function _waitForLibs(attempts = 0) {
   });
 }
 
+function _setTopbarStatusLines(summary) {
+  const updatedAt = new Date(summary.last_updated);
+  _setText("topbar-status-updated", `Updated ${_relativeTime(updatedAt)}`);
+  const checkedRaw = summary.external_feed_last_checked_at;
+  const sub = checkedRaw != null && String(checkedRaw).trim() !== ""
+    ? `(Last checked for new cases ${_relativeTime(new Date(checkedRaw))})`
+    : `(Last checked for new cases —)`;
+  _setText("topbar-status-checked", sub);
+}
+
 function _setText(id, text) {
   const el = document.getElementById(id);
   if (el) el.textContent = text;
+}
+
+/** @param {any} s */
+function _applySummaryKpis(s) {
+  const totalRecorded = s.total_confirmed + s.total_suspected;
+  _setText("kpi-confirmed", totalRecorded);
+  _setText("kpi-confirmed-sub", `${Object.keys(s.data_sources).length} data sources`);
+  _setRecordedCasesTooltip(s);
+  _setText("kpi-deaths", s.total_deaths);
+  const cfr = totalRecorded > 0
+    ? Math.round((s.total_deaths / totalRecorded) * 100) + "%"
+    : "—";
+  _setText("kpi-deaths-sub", `CFR ${cfr}`);
+  _setTopbarStatusLines(s);
+}
+
+/** @param {any} s */
+function _setRecordedCasesTooltip(s) {
+  const tip = document.getElementById("kpi-recorded-tip");
+  if (!tip) return;
+  const breakdown = `${s.total_confirmed} confirmed · ${s.total_suspected} suspected`;
+  const rest =
+    "Person-equivalent totals: individual rows plus ingested cohort or summary observations (each cohort row counts as cohort_size confirmed/suspected persons).";
+  tip.setAttribute("data-tip", `${breakdown}. ${rest}`);
+  tip.setAttribute("aria-label", `Recorded cases: ${breakdown}`);
+}
+
+/** @param {any} forecastResponse baseline JSON or null @param {any} summaryFallback optional /cases/summary for death fan if forecast body missing */
+function _applyForecastKpis(forecastResponse, summaryFallback) {
+  const last = forecastResponse?.forecast?.at(-1);
+  if (!last) {
+    _setText("kpi-forecast", "—");
+    _setText("kpi-forecast-sub", "");
+    const sm = summaryFallback;
+    if (
+      sm != null
+      && sm.forecast_deaths_median_14d != null
+      && sm.forecast_deaths_ci_95_lower_14d != null
+      && sm.forecast_deaths_ci_95_upper_14d != null
+    ) {
+      _setText("kpi-forecast-deaths", sm.forecast_deaths_median_14d);
+      _setText(
+        "kpi-forecast-deaths-sub",
+        `95% CI: ${sm.forecast_deaths_ci_95_lower_14d}–${sm.forecast_deaths_ci_95_upper_14d} deaths`,
+      );
+    } else {
+      _setText("kpi-forecast-deaths", "—");
+      _setText("kpi-forecast-deaths-sub", "");
+    }
+    return;
+  }
+  const cases = last.cases_cumulative;
+  _setText("kpi-forecast", cases.median);
+  _setText("kpi-forecast-sub", `95% CI: ${cases.ci_95_lower}–${cases.ci_95_upper} cases`);
+  const deaths = last.deaths_cumulative;
+  _setText("kpi-forecast-deaths", deaths.median);
+  _setText("kpi-forecast-deaths-sub", `95% CI: ${deaths.ci_95_lower}–${deaths.ci_95_upper} deaths`);
+}
+
+function _forecastFreshnessLabel(forecast) {
+  const n = forecast?.metadata?.n_simulations;
+  if (typeof n === "number") {
+    return `${n.toLocaleString()} simulations`;
+  }
+  return "Simulation result loaded";
 }
 
 function _relativeTime(date) {

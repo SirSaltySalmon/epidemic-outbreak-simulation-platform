@@ -15,7 +15,7 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from eosp.core.models import CaseRecord, CaseStatus, ObservationKind
 from eosp.services.metapop import MetapopParams, run_ensemble_metapop
@@ -91,6 +91,7 @@ def build_outbreak_geo(
     metapop_n_runs: int | None = None,
     metapop_mobility_path: Path | None = None,
     ship_outbreak_mass: float | None = None,
+    metapop_progress_callback: Callable[[dict[str, Any]], None] | None = None,
 ) -> dict[str, Any]:
     """Build the complete geo/outbreak payload.
 
@@ -195,6 +196,7 @@ def build_outbreak_geo(
         init_r=init_r,
         n_runs=n_runs,
         rng_seed=int(os.environ.get("EOSP_METAPOP_SEED", "20260507")),
+        progress_callback=metapop_progress_callback,
     )
 
     sidecar = load_mobility_sidecar_meta(mobility_path)

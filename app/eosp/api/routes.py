@@ -21,6 +21,7 @@ from eosp.services.forecast import (
     run_forecast_engine,
 )
 from eosp.services.scenarios import SCENARIO_CONFIG
+from eosp.services.geo import build_outbreak_geo
 
 _SSE_POLL_INTERVAL_SECONDS = 0.5
 
@@ -30,6 +31,19 @@ router = APIRouter()
 @router.get("/health")
 def health() -> dict[str, str]:
     return {"status": "ok"}
+
+
+@router.get("/geo/outbreak")
+def geo_outbreak(request: Request):
+    repo = request.app.state.repository
+    p_transmit = 0.089  # fallback
+    try:
+        inference = repo.latest_inference()
+    except LookupError:
+        inference = None
+    if inference is not None and "p_transmit" in inference.parameters:
+        p_transmit = float(inference.parameters["p_transmit"].mean)
+    return build_outbreak_geo(p_transmit=p_transmit)
 
 
 @router.get("/cases/summary", response_model=CaseSummary)

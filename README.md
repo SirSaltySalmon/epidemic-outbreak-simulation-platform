@@ -48,4 +48,8 @@ The metapop risk map can consume a mobility schedule built from open flight rout
 python -m eosp.scripts.build_mobility_bundle --routes data/raw/openflights/routes.dat --out-json app/eosp/data/bundles/example.json
 ```
 
-Add `--out-parquet path/to/bundle.parquet` if you want the long-table Parquet form; that requires PyArrow via `python -m pip install -e ".[mobility]"`. The script writes a sidecar `*.meta.json` next to the JSON output with provenance fields you can edit. Point the API at a mobility file with the environment variable `EOSP_METAPOP_MOBILITY` (absolute or repo-relative path to the `.json` or `.parquet` schedule).
+Add `--out-parquet path/to/bundle.parquet` if you want the long-table Parquet form; that requires PyArrow via `python -m pip install -e ".[mobility]"`. The script writes a sidecar `*.meta.json` next to the JSON output with provenance fields you can edit. Generated `app/eosp/data/bundles/*.json` files are **gitignored** (they can be tens of MB).
+
+Point the API at a mobility file with `EOSP_METAPOP_MOBILITY` (absolute or repo-relative path to the `.json` or `.parquet` schedule). The dashboard calls `GET /api/v1/geo/outbreak` without a query flag by default; set **`EOSP_GEO_RISK_MODEL=metapop`** in `.env` so the same UI uses the metapop kernel (otherwise it stays on the legacy OpenSky ring heuristic). Leave `EOSP_GEO_RISK_MODEL=legacy` while iterating.
+
+A **full** OpenFlights-derived graph spans thousands of airports and ~10⁴ edges per simulated day; metapop runs can be **slow** or memory-heavy. For interactive use, prefer the checked-in `mobility_weekly_skeleton.json` (default when `EOSP_METAPOP_MOBILITY` is unset) until you add a **region-filtered** ETL export.

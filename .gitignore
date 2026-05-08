@@ -3,6 +3,10 @@ data/raw/*
 !data/raw/openflights/
 data/raw/openflights/*
 !data/raw/openflights/.gitkeep
+# Generated mobility bundles (build locally; see README "Mobility bundle")
+app/eosp/data/bundles/*.json
+app/eosp/data/bundles/*.meta.json
+!app/eosp/data/bundles/.gitkeep
 __pycache__/
 *.py[cod]
 .pytest_cache/

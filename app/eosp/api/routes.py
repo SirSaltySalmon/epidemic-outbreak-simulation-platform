@@ -6,6 +6,7 @@ from fastapi import APIRouter, Body, HTTPException, Query, Request, Response, st
 from pydantic import BaseModel, Field, field_validator, model_validator
 from fastapi.responses import StreamingResponse
 
+from eosp.core.settings import get_settings
 from eosp.core.models import (
     CaseCreate,
     CaseIngestionResponse,
@@ -77,10 +78,15 @@ def health(request: Request) -> dict[str, object]:
 def geo_outbreak(
     request: Request,
     http_response: Response,
-    risk_model: str = Query(default="legacy"),
+    risk_model: str | None = Query(default=None),
     metapop_runs: int | None = Query(default=None, ge=1, le=5000),
 ):
     http_response.headers["Cache-Control"] = "no-store"
+    effective_risk = risk_model if risk_model is not None else get_settings().geo_risk_model
+    if (effective_risk or "").lower() not in ("legacy", "metapop"):
+        effective_risk = "legacy"
+    else:
+        effective_risk = effective_risk.lower()
     repo = request.app.state.repository
     p_transmit = 1.5 / 21.5  # Beta(1.5, 20) prior mean when no posterior yet
     try:
@@ -93,7 +99,7 @@ def geo_outbreak(
     return build_outbreak_geo(
         p_transmit=p_transmit,
         cases=cases,
-        risk_model=risk_model,
+        risk_model=effective_risk,
         metapop_n_runs=metapop_runs,
     )
 

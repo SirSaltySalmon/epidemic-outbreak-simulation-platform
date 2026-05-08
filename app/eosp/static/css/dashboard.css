@@ -1,7 +1,7 @@
 /* ── Topbar ── */
 /* Above Leaflet .leaflet-control { z-index: 800 } so zoom (+/−) stays under the bar */
 .topbar {
-  position: fixed; top: 0; left: 0; right: 0; z-index: 1000;
+  position: fixed; top: 0; left: 0; right: 0; z-index: 1200;
   height: var(--topbar-h);
   background: #071410;
   border-bottom: 1px solid var(--panel-border);
@@ -29,6 +29,8 @@
   flex: 0 0 auto;
   min-width: max-content;
   max-width: none;
+  /* Wide viewports: push status / version / CTA to the right; narrow: auto margin → 0 when overflow scrolls */
+  margin-right: auto;
 }
 /* Stable two-line title: no wrap, no flex shrink — narrow viewports scroll the bar instead */
 .topbar-brand .eyebrow {

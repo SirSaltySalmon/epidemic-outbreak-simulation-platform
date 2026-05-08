@@ -1,7 +1,7 @@
 # Design: Production OD mobility from open/community data
 
 **Date:** 2026-05-08  
-**Status:** Draft for implementation planning  
+**Status:** Approved — implementation plan: `docs/superpowers/plans/2026-05-11-production-mobility-od.md`  
 **Constraint:** **Open/community data only** for the first real mobility bundle (no paid OAG/Cirium-class feeds in v1).
 
 ## Problem

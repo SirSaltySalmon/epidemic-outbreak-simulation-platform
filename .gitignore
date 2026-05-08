@@ -1,3 +1,8 @@
+# Raw downloads (keep placeholder dir tracked)
+data/raw/*
+!data/raw/openflights/
+data/raw/openflights/*
+!data/raw/openflights/.gitkeep
 __pycache__/
 *.py[cod]
 .pytest_cache/

@@ -203,6 +203,7 @@ def _run_trajectories(
 ) -> list[Trajectory]:
     n_simulations = n_simulations or len(samples["p_transmit"])
     BATCH_REPORT = 500
+    t_start = perf_counter()
 
     def run_one(index: int) -> Trajectory:
         sample_rng = np.random.default_rng((rng_seed + index) & 0xFFFFFFFF)
@@ -226,12 +227,14 @@ def _run_trajectories(
         for i in range(n_simulations):
             results.append(run_one(i))
             if progress_callback and (i + 1) % BATCH_REPORT == 0:
+                elapsed = perf_counter() - t_start
                 progress_callback({
                     "stage": "simulation",
                     "status": "running",
                     "trajectories": i + 1,
                     "total": n_simulations,
                     "scenario": scenario_name,
+                    "elapsed_s": round(elapsed, 2),
                     "fan_sample": _sample_fan(results, n_days=n_days, k=10),
                 })
         return results
@@ -251,12 +254,14 @@ def _run_trajectories(
             if progress_callback and completed_count - last_reported >= BATCH_REPORT:
                 last_reported = completed_count
                 done_so_far = [r for r in results if r is not None]
+                elapsed = perf_counter() - t_start
                 progress_callback({
                     "stage": "simulation",
                     "status": "running",
                     "trajectories": completed_count,
                     "total": n_simulations,
                     "scenario": scenario_name,
+                    "elapsed_s": round(elapsed, 2),
                     "fan_sample": _sample_fan(done_so_far, n_days=n_days, k=10),
                 })
     return cast(list[Trajectory], results)

@@ -3,7 +3,7 @@ import json
 from uuid import UUID
 
 from fastapi import APIRouter, Body, HTTPException, Query, Request, status
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator, model_validator
 from fastapi.responses import StreamingResponse
 
 from eosp.core.models import (
@@ -31,6 +31,25 @@ router = APIRouter()
 
 class InferenceRunBody(BaseModel):
     reason: str = Field(default="manual", max_length=500)
+    scenarios: list[str] | None = None
+    n_simulations: int | None = Field(default=None, ge=1, le=100_000)
+
+    @field_validator("scenarios", mode="before")
+    @classmethod
+    def _dedupe_preserve_order(cls, v: list[str] | None) -> list[str] | None:
+        if v is None:
+            return None
+        return list(dict.fromkeys(v))
+
+    @model_validator(mode="after")
+    def _scenarios_nonempty_when_present(self):
+        if self.scenarios is not None and len(self.scenarios) == 0:
+            raise ValueError("scenarios must not be empty when provided")
+        if self.scenarios is not None:
+            unknown = [s for s in self.scenarios if s not in SCENARIO_CONFIG]
+            if unknown:
+                raise ValueError(f"Unknown scenario(s): {', '.join(unknown)}")
+        return self
 
 
 @router.get("/health")
@@ -179,7 +198,12 @@ def trigger_inference(
     jobs = getattr(request.app.state, "jobs", None)
     if jobs is None:
         raise HTTPException(status_code=503, detail="Background job manager unavailable")
-    job_id = jobs.schedule_full_refresh(reason=body.reason, trigger=TriggerType.MANUAL)
+    job_id = jobs.schedule_full_refresh(
+        reason=body.reason,
+        trigger=TriggerType.MANUAL,
+        scenarios=body.scenarios,
+        n_simulations=body.n_simulations,
+    )
     return {"job_id": job_id, "status": "scheduled", "reason": body.reason}
 
 

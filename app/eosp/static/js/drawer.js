@@ -22,12 +22,55 @@ let _selectedScenarios = new Set(["baseline"]);
 let _selectedFidelity = 100;
 let _cancelSSE = null;
 let _lastRun = null;
+let _inferenceEtaTick = null;
+
+function _clearInferenceEtaTicker() {
+  if (_inferenceEtaTick) {
+    clearInterval(_inferenceEtaTick);
+    _inferenceEtaTick = null;
+  }
+}
+
+function _startInferenceEtaTicker() {
+  _clearInferenceEtaTicker();
+  const t0 = Date.now();
+  _inferenceEtaTick = setInterval(() => {
+    const el = document.querySelector('.stage-card[data-stage="2"] .inference-eta');
+    if (!el) {
+      _clearInferenceEtaTicker();
+      return;
+    }
+    const s = Math.floor((Date.now() - t0) / 1000);
+    el.textContent = `Elapsed: ${s}s · completion ETA not streamed (wait for sampler)`;
+  }, 1000);
+}
+
+function _formatEtaSeconds(sec) {
+  if (!Number.isFinite(sec) || sec < 0) return "—";
+  if (sec < 90) return `~${Math.max(1, Math.round(sec))}s`;
+  if (sec < 7200) return `~${Math.round(sec / 60)}m`;
+  return `~${Math.round(sec / 3600)}h`;
+}
+
+/** Remaining time for Monte Carlo from server elapsed_s + progress. */
+function _simEtaLine(data) {
+  const done = data.trajectories ?? 0;
+  const total = data.total ?? 0;
+  const elapsed = data.elapsed_s;
+  if (done > 0 && total > 0 && done < total && typeof elapsed === "number" && elapsed > 0.05) {
+    const rate = done / elapsed;
+    const remain = (total - done) / rate;
+    return `Est. remaining: ${_formatEtaSeconds(remain)}`;
+  }
+  return "";
+}
 
 export function initDrawer(onRunComplete) {
   _renderIdle(onRunComplete);
 }
 
 function _renderIdle(onRunComplete) {
+  _clearInferenceEtaTicker();
   const body = document.getElementById("drawer-body");
   body.innerHTML = "";
 
@@ -70,7 +113,11 @@ async function _startRun(onRunComplete) {
 
   let jobId;
   try {
-    const result = await post("/inference/run", { reason: "manual" });
+    const result = await post("/inference/run", {
+      reason: "manual",
+      scenarios: [..._selectedScenarios],
+      n_simulations: _selectedFidelity,
+    });
     jobId = result.job_id;
   } catch (err) {
     alert("Failed to start run: " + err.message);
@@ -90,8 +137,10 @@ async function _startRun(onRunComplete) {
 function _handleEvent(event) {
   if (event.stage === "cases") {
     _updateStage(1, "done", event);
+    _startInferenceEtaTicker();
     _updateStage(2, "active", {});
   } else if (event.stage === "inference") {
+    _clearInferenceEtaTicker();
     _updateStage(2, "active", event);
   } else if (event.stage === "simulation") {
     _updateStage(2, "done", {});
@@ -101,6 +150,7 @@ function _handleEvent(event) {
 
 async function _handleComplete(event, jobId, onRunComplete) {
   _cancelSSE = null;
+  _clearInferenceEtaTicker();
   _updateStage(3, "done", {});
   _updateStage(4, "active", { job_id: jobId, detail: event.detail });
 
@@ -115,6 +165,7 @@ async function _handleComplete(event, jobId, onRunComplete) {
 }
 
 function _renderRunning() {
+  _clearInferenceEtaTicker();
   const body = document.getElementById("drawer-body");
   body.innerHTML = "";
 
@@ -170,6 +221,17 @@ function _stageBodyHtml(n, state, data) {
     </div>`;
   }
   if (n === 2) {
+    if (state === "active" && data.status === "skipped") {
+      return `<div style="color:var(--ink-muted);font-size:0.82rem">Inference skipped (${
+        (data.reason || "").replace(/</g, "")
+      }) — using stored posterior.</div>`;
+    }
+    if (state === "active" && data.status !== "complete" && data.status !== "skipped") {
+      return `
+        <div style="color:var(--teal-light);font-size:0.82rem">Running NUTS sampler…</div>
+        <div class="progress-eta inference-eta" style="color:var(--ink-muted);font-size:0.78rem">Starting…</div>
+      `;
+    }
     const draw = data.draw ?? 0;
     const total = data.total ?? 2000;
     const pct = Math.round((draw / total) * 100);
@@ -205,6 +267,9 @@ function _stageBodyHtml(n, state, data) {
         <div class="stat-box"><div class="stat-lbl">Progress</div><div class="stat-val">${pct}%</div></div>
       </div>
       <div class="progress-bar"><div class="progress-fill" style="width:${pct}%"></div></div>
+      <div class="progress-eta" style="color:var(--ink-muted);font-size:0.78rem">${
+        _simEtaLine(data) || "Estimating time…"
+      }</div>
       <div id="fan-chart-${Date.now()}"></div>
     `;
   }

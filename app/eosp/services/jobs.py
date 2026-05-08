@@ -15,7 +15,7 @@ import threading
 import time
 import uuid
 from concurrent.futures import Future, ThreadPoolExecutor
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from typing import Any, Mapping
 
@@ -101,8 +101,20 @@ class JobManager:
         self._inference_config = inference_config or InferenceConfig()
         self._refit_in_flight = False
 
-    def schedule_full_refresh(self, *, reason: str = "startup", trigger: TriggerType = TriggerType.MANUAL) -> str:
-        record = self._register(JOB_FULL_REFRESH, reason=reason, detail={"trigger": trigger.value})
+    def schedule_full_refresh(
+        self,
+        *,
+        reason: str = "startup",
+        trigger: TriggerType = TriggerType.MANUAL,
+        scenarios: list[str] | None = None,
+        n_simulations: int | None = None,
+    ) -> str:
+        detail: dict[str, Any] = {"trigger": trigger.value}
+        if scenarios is not None:
+            detail["scenarios_requested"] = list(scenarios)
+        if n_simulations is not None:
+            detail["n_simulations"] = int(n_simulations)
+        record = self._register(JOB_FULL_REFRESH, reason=reason, detail=detail)
         self._executor.submit(self._safe_run, record, lambda: self._run_full_refresh(record, trigger))
         return record.job_id
 
@@ -227,8 +239,26 @@ class JobManager:
             samples = None
             record.push_event({"stage": "inference", "status": "skipped", "reason": "fallback"})
 
+        n_override = record.detail.get("n_simulations")
+        ensemble_cfg = (
+            replace(self._ensemble_config, n_simulations=int(n_override))
+            if n_override is not None
+            else self._ensemble_config
+        )
+
+        requested = record.detail.get("scenarios_requested")
+        if requested is None:
+            scenario_items: list[tuple[str, ScenarioSpec]] = list(self._scenarios.items())
+        else:
+            scenario_items = []
+            for name in requested:
+                spec = self._scenarios.get(name)
+                if spec is None:
+                    raise KeyError(name)
+                scenario_items.append((name, spec))
+
         seed = self._build_seed_state(cases)
-        for scenario_name, spec in self._scenarios.items():
+        for scenario_name, spec in scenario_items:
 
             def _callback(event: dict, _jid: str = record.job_id) -> None:
                 self.push_event(_jid, event)
@@ -238,12 +268,12 @@ class JobManager:
                 inference=inference,
                 network=self._network,
                 seed=seed,
-                config=self._ensemble_config,
+                config=ensemble_cfg,
                 posterior_samples=samples,
                 progress_callback=_callback,
             )
             self._cache_forecast(scenario_name, response)
-        record.detail["scenarios_refreshed"] = list(self._scenarios.keys())
+        record.detail["scenarios_refreshed"] = [n for n, _ in scenario_items]
 
     def _run_single_ensemble(self, record: JobRecord, scenario_name: str) -> None:
         if scenario_name not in self._scenarios:

@@ -1,6 +1,6 @@
 /* ── Topbar ── */
 .topbar {
-  position: fixed; top: 0; left: 0; right: 0; z-index: 50;
+  position: fixed; top: 0; left: 0; right: 0; z-index: 800;
   height: var(--topbar-h);
   background: #071410;
   border-bottom: 1px solid var(--panel-border);

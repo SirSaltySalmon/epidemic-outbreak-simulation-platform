@@ -11,6 +11,7 @@ import logging
 import numpy as np
 
 from eosp.services.mobility import MobilitySchedule
+from eosp.services.patch_codes import iata_from_destination
 
 logger = logging.getLogger(__name__)
 
@@ -21,12 +22,6 @@ _FLIGHT_FRAC_I = 0.05
 # Ship outbreak mass split between E and I (80/20).
 _SHIP_FRAC_E = 0.8
 _SHIP_FRAC_I = 0.2
-
-
-def _iata_from_destination(destination: str) -> str:
-    if "_" in destination:
-        return destination.rsplit("_", 1)[-1]
-    return destination
 
 
 def _ship_patch_index(patch_ids: tuple[str, ...]) -> int:
@@ -42,7 +37,7 @@ def _ship_patch_index(patch_ids: tuple[str, ...]) -> int:
 def _patch_index_for_flight_destination(
     patch_ids: tuple[str, ...], destination: str
 ) -> int | None:
-    iata = _iata_from_destination(destination)
+    iata = iata_from_destination(destination)
     for i, pid in enumerate(patch_ids):
         if pid == destination:
             return i
@@ -93,7 +88,7 @@ def build_initial_metapop_state(
                 "Metapop seed: flight destination %r (IATA %r) not in schedule "
                 "patch_ids %s; skipping.",
                 dest,
-                _iata_from_destination(dest),
+                iata_from_destination(dest),
                 schedule.patch_ids,
             )
             continue

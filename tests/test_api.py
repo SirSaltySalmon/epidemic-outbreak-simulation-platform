@@ -1,3 +1,6 @@
+from pathlib import Path
+from shutil import copyfile
+
 from fastapi.testclient import TestClient
 import pytest
 
@@ -53,6 +56,33 @@ def test_geo_outbreak_metapop_risk_source():
     r = client.get("/api/v1/geo/outbreak?risk_model=metapop&metapop_runs=8")
     assert r.status_code == 200
     assert r.json()["metadata"].get("risk_source") == "metapop_monte_carlo"
+
+
+def test_geo_outbreak_metapop_includes_sidecar_metadata(tmp_path):
+    from eosp.core.seed_data import CASES
+    from eosp.services.geo import build_outbreak_geo
+
+    data_dir = Path(__file__).resolve().parents[1] / "app" / "eosp" / "data"
+    mob = tmp_path / "mobility_minimal.json"
+    copyfile(data_dir / "mobility_weekly_skeleton.json", mob)
+    copyfile(
+        Path(__file__).resolve().parent / "fixtures" / "mobility_minimal.meta.json",
+        tmp_path / "mobility_minimal.meta.json",
+    )
+
+    out = build_outbreak_geo(
+        p_transmit=0.1,
+        cases=list(CASES),
+        risk_model="metapop",
+        metapop_n_runs=4,
+        metapop_mobility_path=mob,
+    )
+    md = out["metadata"]
+    assert md["risk_source"] == "metapop_monte_carlo"
+    assert md["mobility_bundle_version"] == "mobility_minimal.json"
+    assert md["mobility_horizon_days"] == 14
+    assert md["mobility_source"] == "fixture OpenFlights"
+    assert md["mobility_license_note"] == "Test fixture only."
 
 
 def test_health_check():

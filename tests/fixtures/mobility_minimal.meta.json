@@ -1,0 +1,5 @@
+{
+  "mobility_source": "fixture OpenFlights",
+  "mobility_license_note": "Test fixture only.",
+  "horizon_days": 14
+}

@@ -17,10 +17,10 @@ import os
 from pathlib import Path
 from typing import Any
 
-from eosp.core.models import CaseRecord, CaseStatus
+from eosp.core.models import CaseRecord, CaseStatus, ObservationKind
 from eosp.services.metapop import MetapopParams, run_ensemble_metapop
 from eosp.services.metapop_seed import build_initial_metapop_state
-from eosp.services.mobility import load_mobility_schedule
+from eosp.services.mobility import load_mobility_schedule, load_mobility_sidecar_meta
 from eosp.services.opensky import load_airport_coords
 from eosp.services.risk_propagation import compute_risk_zones
 
@@ -49,12 +49,15 @@ def _case_markers_from_records(cases: list[CaseRecord], airport_coords: dict[str
                 "airport": "",
             }
         b = by_country[cc]
+        w = c.cohort_size
         if c.confirmed_or_suspected == CaseStatus.CONFIRMED:
-            b["confirmed"] += 1
+            b["confirmed"] += w
         else:
-            b["suspected"] += 1
-        if c.death_date is not None:
-            b["deaths"] += 1
+            b["suspected"] += w
+        if c.observation_kind == ObservationKind.COHORT:
+            b["deaths"] += c.cohort_deaths
+        elif c.death_date is not None:
+            b["deaths"] += w
         code = (c.location_airport_code or "").upper()
         if b["lat"] is None and code:
             ac = airport_coords.get(code)
@@ -194,6 +197,17 @@ def build_outbreak_geo(
         rng_seed=int(os.environ.get("EOSP_METAPOP_SEED", "20260507")),
     )
 
+    sidecar = load_mobility_sidecar_meta(mobility_path)
+    extra_meta: dict[str, Any] = {}
+    if sidecar is not None:
+        extra_meta["mobility_bundle_version"] = mobility_path.name
+        if "mobility_source" in sidecar:
+            extra_meta["mobility_source"] = sidecar["mobility_source"]
+        if "mobility_license_note" in sidecar:
+            extra_meta["mobility_license_note"] = sidecar["mobility_license_note"]
+        if "horizon_days" in sidecar:
+            extra_meta["mobility_horizon_days"] = sidecar["horizon_days"]
+
     heatmap: list[dict[str, Any]] = []
     for entry in summary["patches"]:
         code = str(entry["code"])
@@ -238,6 +252,7 @@ def build_outbreak_geo(
                 "simulated day, driven by the mobility schedule and SEIR local dynamics. Not an OpenSky ring score "
                 "and not a calibrated case forecast per airport."
             ),
+            **extra_meta,
         },
     }
 

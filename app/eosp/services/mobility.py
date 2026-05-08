@@ -18,6 +18,20 @@ class MobilitySchedule:
         return self.patch_ids.index(code)
 
 
+def load_mobility_sidecar_meta(mobility_path: Path) -> dict | None:
+    """If ``{stem}.meta.json`` sits next to the mobility file, return it as a dict.
+
+    For ``foo.parquet`` or ``foo.json``, the sidecar file name is ``foo.meta.json``.
+    """
+    meta_path = mobility_path.with_name(mobility_path.stem + ".meta.json")
+    if not meta_path.is_file():
+        return None
+    raw = json.loads(meta_path.read_text(encoding="utf-8"))
+    if not isinstance(raw, dict):
+        return None
+    return raw
+
+
 def load_mobility_schedule(path: Path) -> MobilitySchedule:
     suffix = path.suffix.lower()
     if suffix == ".json":

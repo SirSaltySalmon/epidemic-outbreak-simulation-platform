@@ -82,19 +82,34 @@ def geo_outbreak(
     metapop_runs: int | None = Query(default=None, ge=1, le=5000),
 ):
     http_response.headers["Cache-Control"] = "no-store"
-    effective_risk = risk_model if risk_model is not None else get_settings().geo_risk_model
+    settings = get_settings()
+    effective_risk = risk_model if risk_model is not None else settings.geo_risk_model
     if (effective_risk or "").lower() not in ("legacy", "metapop"):
         effective_risk = "legacy"
     else:
         effective_risk = effective_risk.lower()
+    if effective_risk == "metapop" and not settings.metapop_enabled:
+        effective_risk = "legacy"
     repo = request.app.state.repository
     p_transmit = 1.5 / 21.5  # Beta(1.5, 20) prior mean when no posterior yet
+    inference_version: str | None = None
     try:
         inference = repo.latest_inference()
         if inference is not None and "p_transmit" in inference.parameters:
             p_transmit = float(inference.parameters["p_transmit"].mean)
+        if inference is not None:
+            inference_version = inference.version
     except LookupError:
         pass
+    if (
+        settings.metapop_enabled
+        and effective_risk == "metapop"
+        and inference_version
+        and hasattr(repo, "get_geo_outbreak_cache")
+    ):
+        cached = repo.get_geo_outbreak_cache(inference_version, metapop_runs=metapop_runs)
+        if cached is not None:
+            return cached
     cases = repo.list_cases()
     return build_outbreak_geo(
         p_transmit=p_transmit,
@@ -107,13 +122,40 @@ def geo_outbreak(
 @router.get("/cases/summary", response_model=CaseSummary)
 def case_summary(request: Request, http_response: Response) -> CaseSummary:
     http_response.headers["Cache-Control"] = "no-store"
-    confirmed, suspected, deaths, last_updated, sources = request.app.state.repository.case_summary()
+    confirmed, suspected, deaths, last_updated, sources, feed_last = request.app.state.repository.case_summary()
+    repo = request.app.state.repository
+    fd_med, fd_lo, fd_hi = _baseline_forecast_deaths_final_day(repo)
     return CaseSummary(
         total_confirmed=confirmed,
         total_suspected=suspected,
         total_deaths=deaths,
         last_updated=last_updated,
         data_sources=sources,
+        external_feed_last_checked_at=feed_last,
+        forecast_deaths_median_14d=fd_med,
+        forecast_deaths_ci_95_lower_14d=fd_lo,
+        forecast_deaths_ci_95_upper_14d=fd_hi,
+    )
+
+
+def _baseline_forecast_deaths_final_day(repo) -> tuple[float | None, float | None, float | None]:
+    """Death fan from cached baseline forecast final horizon day, if inference + cache exist."""
+
+    try:
+        inference = repo.latest_inference()
+    except LookupError:
+        return None, None, None
+    try:
+        fc = get_cached_forecast("baseline", repo, inference=inference)
+    except ForecastNotCachedError:
+        return None, None, None
+    if not fc.forecast:
+        return None, None, None
+    block = fc.forecast[-1].deaths_cumulative
+    return (
+        block.get("median"),
+        block.get("ci_95_lower"),
+        block.get("ci_95_upper"),
     )
 
 

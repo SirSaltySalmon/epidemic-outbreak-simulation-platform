@@ -6,11 +6,21 @@ import pytest
 
 from eosp.core.repository import InMemoryRepository
 from eosp.core.seed_data import ALERTS, CASES, INFERENCES, VALIDATIONS
+from eosp.core.settings import get_settings
 from eosp.main import app
 from eosp.services.forecast import _FORECAST_CACHE
 
 
 client = TestClient(app)
+
+
+@pytest.fixture
+def enable_metapop(monkeypatch):
+    monkeypatch.setenv("EOSP_METAPOP_ENABLED", "true")
+    get_settings.cache_clear()
+    yield
+    monkeypatch.delenv("EOSP_METAPOP_ENABLED", raising=False)
+    get_settings.cache_clear()
 
 
 def _clear_forecast_cache_everywhere() -> None:
@@ -52,10 +62,19 @@ def reset_app_repository():
     _FORECAST_CACHE.clear()
 
 
-def test_geo_outbreak_metapop_risk_source():
+def test_geo_outbreak_metapop_risk_source(enable_metapop):
     r = client.get("/api/v1/geo/outbreak?risk_model=metapop&metapop_runs=8")
     assert r.status_code == 200
     assert r.json()["metadata"].get("risk_source") == "metapop_monte_carlo"
+
+
+def test_geo_outbreak_metapop_disabled_coerces_to_legacy():
+    """EOSP_METAPOP_ENABLED defaults false — metapop product surface is deprecated."""
+    r = client.get("/api/v1/geo/outbreak?risk_model=metapop")
+    assert r.status_code == 200
+    md = r.json()["metadata"]
+    assert md.get("risk_source") != "metapop_monte_carlo"
+    assert "OpenSky" in md.get("risk_heatmap_explanation", "")
 
 
 def test_geo_outbreak_metapop_includes_sidecar_metadata(tmp_path):
@@ -85,6 +104,31 @@ def test_geo_outbreak_metapop_includes_sidecar_metadata(tmp_path):
     assert md["mobility_license_note"] == "Test fixture only."
 
 
+def test_geo_outbreak_metapop_serves_run_snapshot_cache_when_current(monkeypatch, enable_metapop):
+    repo = app.state.repository
+    inf = repo.latest_inference()
+    repo.cache_geo_outbreak(
+        inf.version,
+        {
+            "ship": {"lat": 1, "lng": 2, "name": "Test", "status": "x"},
+            "confirmed_cases": [],
+            "evacuation_flights": [],
+            "risk_heatmap": [{"airport_iata": "TST", "lat": 0, "lng": 0, "risk_score": 3.14}],
+            "metadata": {"risk_source": "metapop_monte_carlo", "metapop_n_runs": 8},
+        },
+    )
+
+    def boom(**kwargs):
+        raise AssertionError("build_outbreak_geo should not run when snapshot matches")
+
+    monkeypatch.setattr("eosp.api.routes.build_outbreak_geo", boom)
+    r = client.get("/api/v1/geo/outbreak?risk_model=metapop")
+    assert r.status_code == 200
+    data = r.json()
+    assert data["risk_heatmap"][0]["airport_iata"] == "TST"
+    assert data["metadata"]["metapop_n_runs"] == 8
+
+
 def test_health_check():
     response = client.get("/api/v1/health")
     assert response.status_code == 200
@@ -103,6 +147,7 @@ def test_case_summary_matches_seed_outbreak():
     assert payload["total_suspected"] == 5
     assert payload["total_deaths"] == 3
     assert payload["data_sources"]["WHO_DON"] == 4
+    assert "external_feed_last_checked_at" in payload
 
 
 def test_forecast_includes_credible_intervals():

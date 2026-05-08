@@ -11,17 +11,25 @@ from __future__ import annotations
 
 import collections
 import logging
+import os
 import threading
 import time
 import uuid
-from concurrent.futures import Future, ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from typing import Any, Mapping
 
+from eosp.core.case_statistics import (
+    total_cohort_persons,
+    total_death_equivalents,
+    validation_quality_weighted_mean,
+)
 from eosp.core.models import CaseRecord, InferenceResult, TriggerType
+from eosp.core.settings import get_settings
 from eosp.services.ensemble import EnsembleConfig, run_ensemble, seed_state_from_case_counts
-from eosp.services.inference import InferenceArtifacts, InferenceConfig, run_inference
+from eosp.services.geo import build_outbreak_geo
+from eosp.services.inference import InferenceConfig, run_inference
 from eosp.services.network import ContactNetwork
 from eosp.services.scenarios import ScenarioSpec
 
@@ -100,6 +108,24 @@ class JobManager:
         self._ensemble_config = ensemble_config or EnsembleConfig()
         self._inference_config = inference_config or InferenceConfig()
         self._refit_in_flight = False
+        self._pipeline_job_id: str | None = None
+
+    def get_active_pipeline_job(self) -> JobRecord | None:
+        with self._lock:
+            jid = self._pipeline_job_id
+            if not jid:
+                return None
+            rec = self._jobs.get(jid)
+            if rec is not None and rec.status in ("pending", "running"):
+                return rec
+            return None
+
+    def _pipeline_busy_unlocked(self) -> bool:
+        jid = self._pipeline_job_id
+        if not jid:
+            return False
+        rec = self._jobs.get(jid)
+        return rec is not None and rec.status in ("pending", "running")
 
     def schedule_full_refresh(
         self,
@@ -108,13 +134,17 @@ class JobManager:
         trigger: TriggerType = TriggerType.MANUAL,
         scenarios: list[str] | None = None,
         n_simulations: int | None = None,
-    ) -> str:
+    ) -> str | None:
         detail: dict[str, Any] = {"trigger": trigger.value}
         if scenarios is not None:
             detail["scenarios_requested"] = list(scenarios)
         if n_simulations is not None:
             detail["n_simulations"] = int(n_simulations)
-        record = self._register(JOB_FULL_REFRESH, reason=reason, detail=detail)
+        with self._lock:
+            if self._pipeline_busy_unlocked():
+                return None
+            record = self._register(JOB_FULL_REFRESH, reason=reason, detail=detail)
+            self._pipeline_job_id = record.job_id
         self._executor.submit(self._safe_run, record, lambda: self._run_full_refresh(record, trigger))
         return record.job_id
 
@@ -126,6 +156,9 @@ class JobManager:
     ) -> str | None:
         with self._lock:
             now = time.monotonic()
+            if self._pipeline_busy_unlocked():
+                logger.info("Skipping refit (%s): inference pipeline busy", reason)
+                return None
             if self._refit_in_flight:
                 logger.info("Skipping refit (%s): already in flight", reason)
                 return None
@@ -133,7 +166,8 @@ class JobManager:
                 logger.info("Debouncing refit (%s)", reason)
                 return None
             self._refit_in_flight = True
-        record = self._register(JOB_REFIT, reason=reason, detail={"trigger": trigger.value})
+            record = self._register(JOB_REFIT, reason=reason, detail={"trigger": trigger.value})
+            self._pipeline_job_id = record.job_id
         self._executor.submit(self._safe_run, record, lambda: self._run_full_refresh(record, trigger))
         return record.job_id
 
@@ -183,61 +217,60 @@ class JobManager:
                 with self._lock:
                     self._refit_in_flight = False
                     self._last_refit_completed_at = time.monotonic()
+                    if self._pipeline_job_id == record.job_id:
+                        self._pipeline_job_id = None
 
     def _run_full_refresh(self, record: JobRecord, trigger: TriggerType) -> None:
         cases = self._load_cases()
         if not cases:
-            record.detail["skipped"] = "no_cases"
-            return
+            raise RuntimeError(
+                "No case records in the database. Ingest outbreak cases, then run analysis again."
+            )
 
         record.push_event({
             "stage": "cases",
             "status": "complete",
             "n_cases": len(cases),
-            "quality_mean": round(
-                sum(c.validation_score for c in cases) / len(cases), 3
-            ),
+            "n_persons": int(total_cohort_persons(cases)),
+            "quality_mean": validation_quality_weighted_mean(cases),
         })
 
+        previous_inference: InferenceResult | None = None
         try:
-            artifacts = run_inference(
-                cases=cases,
-                network=self._network,
-                config=self._inference_config,
-                trigger=trigger,
-            )
-        except RuntimeError as exc:
-            record.detail["inference_error"] = str(exc)
-            logger.warning("Inference unavailable, falling back to existing posterior: %s", exc)
-            artifacts = None
+            previous_inference = self._repository.latest_inference()
+        except LookupError:
+            previous_inference = None
 
-        if artifacts is not None:
-            self._update_inference(artifacts.result)
-            record.detail["inference_version"] = artifacts.result.version
-            inference = artifacts.result
-            samples = artifacts.posterior_samples
-            diag = inference.diagnostics
-            record.push_event({
-                "stage": "inference",
-                "status": "complete",
-                "draw": diag.get("n_samples", self._inference_config.num_samples),
-                "total": diag.get("n_samples", self._inference_config.num_samples),
-                "rhat_max": diag.get(
-                    "rhat_max",
-                    max(diag["rhat"].values()) if diag.get("rhat") else 1.0,
-                ),
-                "divergences": diag.get("divergences", 0),
-                "params": {
-                    k: round(float(v.mean), 4)
-                    for k, v in inference.parameters.items()
-                    if k not in ("concentration", "initial_rate")
-                },
-                "chain_rhat": list(diag["rhat"].values()) if diag.get("rhat") else [],
-            })
-        else:
-            inference = self._repository.latest_inference()
-            samples = None
-            record.push_event({"stage": "inference", "status": "skipped", "reason": "fallback"})
+        artifacts = run_inference(
+            cases=cases,
+            network=self._network,
+            config=self._inference_config,
+            trigger=trigger,
+            previous_inference=previous_inference,
+        )
+
+        self._update_inference(artifacts.result)
+        record.detail["inference_version"] = artifacts.result.version
+        inference = artifacts.result
+        samples = artifacts.posterior_samples
+        diag = inference.diagnostics
+        record.push_event({
+            "stage": "inference",
+            "status": "complete",
+            "draw": diag.get("n_samples", self._inference_config.num_samples),
+            "total": diag.get("n_samples", self._inference_config.num_samples),
+            "rhat_max": diag.get(
+                "rhat_max",
+                max(diag["rhat"].values()) if diag.get("rhat") else 1.0,
+            ),
+            "divergences": diag.get("divergences", 0),
+            "params": {
+                k: round(float(v.mean), 4)
+                for k, v in inference.parameters.items()
+                if k not in ("concentration", "initial_rate")
+            },
+            "chain_rhat": list(diag["rhat"].values()) if diag.get("rhat") else [],
+        })
 
         n_override = record.detail.get("n_simulations")
         ensemble_cfg = (
@@ -250,8 +283,10 @@ class JobManager:
         if requested is None:
             scenario_items: list[tuple[str, ScenarioSpec]] = list(self._scenarios.items())
         else:
+            # Dashboard and /forecasts/baseline always expect baseline cached.
+            merged_request = list(dict.fromkeys(["baseline", *[n for n in requested if n != "baseline"]]))
             scenario_items = []
-            for name in requested:
+            for name in merged_request:
                 spec = self._scenarios.get(name)
                 if spec is None:
                     raise KeyError(name)
@@ -259,6 +294,14 @@ class JobManager:
 
         seed = self._build_seed_state(cases)
         for scenario_name, spec in scenario_items:
+            total_simulations = int(ensemble_cfg.n_simulations)
+            record.push_event({
+                "stage": "simulation",
+                "status": "running",
+                "scenario": scenario_name,
+                "trajectories": 0,
+                "total": total_simulations,
+            })
 
             def _callback(event: dict, _jid: str = record.job_id) -> None:
                 self.push_event(_jid, event)
@@ -273,7 +316,72 @@ class JobManager:
                 progress_callback=_callback,
             )
             self._cache_forecast(scenario_name, response)
+            record.push_event({
+                "stage": "simulation",
+                "status": "complete",
+                "scenario": scenario_name,
+                "trajectories": total_simulations,
+                "total": total_simulations,
+                "elapsed_s": response.metadata.get("execution_time_seconds"),
+            })
         record.detail["scenarios_refreshed"] = [n for n, _ in scenario_items]
+
+        _st = get_settings()
+        if (
+            _st.metapop_enabled
+            and (_st.geo_risk_model or "").strip().lower() == "metapop"
+        ):
+            n_runs_env = int(os.environ.get("EOSP_METAPOP_RUNS", "64"))
+            record.push_event({
+                "stage": "metapop_geo",
+                "status": "running",
+                "metapop_n_runs": n_runs_env,
+            })
+            geo_detail: dict[str, Any]
+            try:
+                p_transmit = (
+                    float(inference.parameters["p_transmit"].mean)
+                    if "p_transmit" in inference.parameters
+                    else 1.5 / 21.5
+                )
+                geo_payload = build_outbreak_geo(
+                    p_transmit=p_transmit,
+                    cases=cases,
+                    risk_model="metapop",
+                    metapop_n_runs=n_runs_env,
+                    metapop_progress_callback=lambda ev: self.push_event(
+                        record.job_id,
+                        {
+                            "stage": "metapop_geo",
+                            "status": "running",
+                            "runs_completed": ev["runs_completed"],
+                            "total_runs": ev["total_runs"],
+                            "metapop_n_runs": n_runs_env,
+                            "elapsed_s": ev.get("elapsed_s"),
+                        },
+                    ),
+                )
+                if hasattr(self._repository, "cache_geo_outbreak"):
+                    self._repository.cache_geo_outbreak(inference.version, geo_payload)
+                meta = geo_payload.get("metadata") or {}
+                geo_detail = {
+                    "status": "complete",
+                    "metapop_n_runs": meta.get("metapop_n_runs"),
+                    "p_transmit_used": meta.get("p_transmit_used"),
+                    "risk_source": meta.get("risk_source"),
+                }
+                record.push_event(
+                    {
+                        "stage": "metapop_geo",
+                        "status": "complete",
+                        **geo_detail,
+                    }
+                )
+            except Exception as exc:  # noqa: BLE001 — keep job successful; map can rebuild on GET
+                logger.exception("Metapop geo stage failed after ensemble: %s", exc)
+                geo_detail = {"status": "failed", "error": f"{type(exc).__name__}: {exc}"}
+                record.push_event({"stage": "metapop_geo", **geo_detail})
+            record.detail["metapop_geo"] = geo_detail
 
     def _run_single_ensemble(self, record: JobRecord, scenario_name: str) -> None:
         if scenario_name not in self._scenarios:
@@ -299,12 +407,13 @@ class JobManager:
             return []
 
     def _build_seed_state(self, cases: list[CaseRecord]) -> Any:
-        n_deceased = sum(1 for case in cases if case.death_date is not None)
-        n_observed_alive = max(0, len(cases) - n_deceased)
+        n_total = int(total_cohort_persons(cases))
+        n_deceased = int(total_death_equivalents(cases))
+        n_observed_alive = max(0, n_total - n_deceased)
         n_recovered = max(0, n_observed_alive - 2)
         n_active = min(2, n_observed_alive)
         hidden_multiplier = 1.5
-        n_hidden_exposed = max(4, int(round(len(cases) * hidden_multiplier)))
+        n_hidden_exposed = max(4, int(round(n_total * hidden_multiplier)))
         return seed_state_from_case_counts(
             network=self._network,
             n_recent_active=n_active + 1,

@@ -12,6 +12,7 @@ import json
 import logging
 import time
 from dataclasses import dataclass, field
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -42,6 +43,27 @@ class _CacheEntry:
 _CACHE: dict[tuple[str, int, int], _CacheEntry] = {}
 
 
+def _utc_day_chunks(begin_unix: int, end_unix: int) -> list[tuple[int, int]]:
+    """Split [begin_unix, end_unix] into intervals each contained in one UTC calendar day.
+
+    OpenSky's departures-by-airport endpoint rejects queries spanning more than one UTC day.
+    """
+    if end_unix < begin_unix:
+        return []
+    chunks: list[tuple[int, int]] = []
+    day = datetime.fromtimestamp(begin_unix, UTC).date()
+    last_day = datetime.fromtimestamp(end_unix, UTC).date()
+    while day <= last_day:
+        day_start = datetime(day.year, day.month, day.day, tzinfo=UTC)
+        day_end_excl = day_start + timedelta(days=1)
+        lo = max(begin_unix, int(day_start.timestamp()))
+        hi = min(end_unix, int(day_end_excl.timestamp()) - 1)
+        if lo <= hi:
+            chunks.append((lo, hi))
+        day += timedelta(days=1)
+    return chunks
+
+
 def load_airport_coords() -> dict[str, dict[str, Any]]:
     with _COORDS_PATH.open() as fh:
         return json.load(fh)
@@ -70,9 +92,18 @@ def get_departures(airport_iata: str, begin_unix: int, end_unix: int) -> list[Fl
     if entry is not None and entry.is_fresh():
         return entry.data
 
-    records = _fetch_from_api(airport_iata, begin_unix, end_unix)
-    _CACHE[cache_key] = _CacheEntry(data=records)
-    return records
+    merged: list[FlightRecord] = []
+    seen: set[tuple[str, int, str | None]] = set()
+    for cb, ce in _utc_day_chunks(begin_unix, end_unix):
+        for rec in _fetch_from_api(airport_iata, cb, ce):
+            key = (rec.callsign, rec.est_departure_time, rec.dest_airport_icao)
+            if key in seen:
+                continue
+            seen.add(key)
+            merged.append(rec)
+
+    _CACHE[cache_key] = _CacheEntry(data=merged)
+    return merged
 
 
 def _fetch_from_api(airport_iata: str, begin_unix: int, end_unix: int) -> list[FlightRecord]:

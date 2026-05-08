@@ -1,0 +1,25 @@
+{
+  "version": 1,
+  "patch_ids": ["NSEED", "HUB1", "HUB2", "LEAF"],
+  "days": [
+    {
+      "flows": [
+        {"from": "NSEED", "to": "HUB1", "n": 100},
+        {"from": "HUB1", "to": "HUB2", "n": 80},
+        {"from": "HUB1", "to": "LEAF", "n": 40},
+        {"from": "HUB2", "to": "LEAF", "n": 60}
+      ]
+    },
+    {
+      "flows": [
+        {"from": "HUB1", "to": "HUB2", "n": 80},
+        {"from": "HUB2", "to": "LEAF", "n": 50}
+      ]
+    },
+    {
+      "flows": [
+        {"from": "HUB1", "to": "LEAF", "n": 70}
+      ]
+    }
+  ]
+}

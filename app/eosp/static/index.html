@@ -1,134 +1,109 @@
 <!doctype html>
 <html lang="en">
-  <head>
-    <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>EOSP Situation Report</title>
-    <link rel="stylesheet" href="/styles.css" />
-  </head>
-  <body>
-    <header class="topbar">
-      <div>
-        <p class="eyebrow">Epidemic Outbreak Simulation Platform</p>
-        <h1>Outbreak Situation</h1>
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>EOSP — MV Hondius Outbreak Intelligence</title>
+  <link rel="stylesheet" href="/css/base.css" />
+  <link rel="stylesheet" href="/css/dashboard.css" />
+  <link rel="stylesheet" href="/css/drawer.css" />
+  <!-- Leaflet -->
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin="" />
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin="" defer></script>
+  <script src="https://unpkg.com/leaflet.heat@0.2.0/dist/leaflet-heat.js" defer></script>
+  <!-- Plotly basic (scatter + histogram; ~1MB) -->
+  <script src="https://cdn.plot.ly/plotly-basic-2.35.2.min.js" defer></script>
+</head>
+<body>
+
+  <!-- ── Topbar ── -->
+  <header class="topbar" role="banner">
+    <div class="topbar-brand">
+      <p class="eyebrow">Epidemic Outbreak Simulation Platform</p>
+      <h1>MV Hondius · Andes Hantavirus Outbreak</h1>
+    </div>
+    <span id="topbar-status" class="topbar-status" aria-live="polite">Loading…</span>
+    <span id="version-badge" class="version-badge" title="Model version"></span>
+    <button class="btn-run-analysis" id="btn-open-drawer" type="button" aria-haspopup="dialog">
+      ⚗ Run Analysis →
+    </button>
+  </header>
+
+  <!-- ── Main dashboard ── -->
+  <main class="page-body" id="page-body">
+
+    <!-- KPI strip -->
+    <section class="kpi-strip" aria-label="Key outbreak metrics">
+      <article class="kpi-card">
+        <div class="kpi-label">
+          Confirmed Cases
+          <span class="tip-icon" data-tip="Laboratory-confirmed via PCR or serology. These are certain cases." aria-label="What does confirmed mean?">?</span>
+        </div>
+        <div class="kpi-value" id="kpi-confirmed">—</div>
+        <div class="kpi-sub" id="kpi-confirmed-sub"></div>
+      </article>
+      <article class="kpi-card">
+        <div class="kpi-label">
+          Suspected Cases
+          <span class="tip-icon" data-tip="Clinically consistent with Andes hantavirus but not yet lab-confirmed." aria-label="What does suspected mean?">?</span>
+        </div>
+        <div class="kpi-value" id="kpi-suspected">—</div>
+        <div class="kpi-sub" id="kpi-suspected-sub"></div>
+      </article>
+      <article class="kpi-card">
+        <div class="kpi-label">
+          Deaths · CFR
+          <span class="tip-icon" data-tip="Case fatality rate. Andes hantavirus kills 35–50% of confirmed cases in published literature." aria-label="What is CFR?">?</span>
+        </div>
+        <div class="kpi-value" id="kpi-deaths">—</div>
+        <div class="kpi-sub" id="kpi-deaths-sub"></div>
+      </article>
+      <article class="kpi-card">
+        <div class="kpi-label">
+          14-day Forecast
+          <span class="tip-icon" data-tip="Median projected cumulative cases at day 14. Run 100 simulations: 95 of them land in the CI range." aria-label="What is the forecast?">?</span>
+        </div>
+        <div class="kpi-value" id="kpi-forecast">—</div>
+        <div class="kpi-sub" id="kpi-forecast-sub"></div>
+      </article>
+    </section>
+
+    <!-- World map -->
+    <section class="map-panel" aria-label="Global outbreak and risk map">
+      <div id="world-map"></div>
+    </section>
+
+    <!-- Forecast chart + scenario sidebar -->
+    <div class="workspace">
+      <div class="chart-panel">
+        <div class="panel-heading">
+          <h2>Baseline Forecast · Cumulative cases · 14-day horizon</h2>
+          <span class="freshness" id="chart-freshness"></span>
+        </div>
+        <div id="forecast-chart"></div>
       </div>
-      <div class="version" id="versionBadge">Loading model...</div>
-    </header>
+      <aside class="scenario-sidebar" id="scenario-sidebar" aria-label="Scenario comparison">
+        <!-- populated by scenarios.js -->
+      </aside>
+    </div>
 
-    <main>
-      <section class="metrics" aria-label="Key metrics">
-        <article>
-          <span>Confirmed Cases</span>
-          <strong id="confirmedCases">-</strong>
-        </article>
-        <article>
-          <span>Suspected Cases</span>
-          <strong id="suspectedCases">-</strong>
-        </article>
-        <article>
-          <span>Confirmed Deaths</span>
-          <strong id="deaths">-</strong>
-        </article>
-        <article>
-          <span>14-Day Estimate</span>
-          <strong id="estimate">-</strong>
-        </article>
-      </section>
+  </main>
 
-      <section class="workspace">
-        <div class="panel chart-panel">
-          <div class="panel-heading">
-            <h2>Baseline Forecast</h2>
-            <span id="updatedAt">Updating...</span>
-          </div>
-          <div class="chart" id="forecastChart"></div>
-        </div>
+  <!-- ── Researcher Drawer ── -->
+  <div class="drawer-overlay" id="drawer-overlay" role="dialog" aria-modal="true" aria-label="Researcher Console">
+    <div class="drawer" id="drawer">
+      <div class="drawer-header">
+        <h2>⚗ Researcher Console</h2>
+        <button class="drawer-close" id="btn-close-drawer" type="button" aria-label="Close researcher console">✕</button>
+      </div>
+      <div class="drawer-body" id="drawer-body">
+        <!-- populated by drawer.js -->
+      </div>
+    </div>
+  </div>
 
-        <aside class="panel">
-          <h2>Scenario Comparison</h2>
-          <button class="run-button" id="runForecastsButton" type="button">Run Forecasts</button>
-          <div class="scenario-list" id="scenarioList"></div>
-          <div class="run-list" id="forecastRunList"></div>
-        </aside>
-      </section>
+  <!-- JS modules (type=module keeps them scoped; defer on CDN scripts fires first) -->
+  <script type="module" src="/js/main.js"></script>
 
-      <section class="panel intake-panel">
-        <div class="panel-heading">
-          <h2>Case Intake</h2>
-          <span id="intakeStatus">Ready</span>
-        </div>
-        <form id="caseForm" class="case-form">
-          <label>
-            Patient ID
-            <input name="patient_identifier" value="anon_local_case" required />
-          </label>
-          <label>
-            Onset
-            <input name="symptom_onset_date" type="date" value="2026-05-01" required />
-          </label>
-          <label>
-            Hospitalized
-            <input name="hospitalization_date" type="date" value="2026-05-03" />
-          </label>
-          <label>
-            Country
-            <input name="location_country" maxlength="2" value="ES" required />
-          </label>
-          <label>
-            Airport
-            <input name="location_airport_code" maxlength="3" value="TFN" />
-          </label>
-          <label>
-            Status
-            <select name="confirmed_or_suspected">
-              <option value="suspected">Suspected</option>
-              <option value="confirmed">Confirmed</option>
-            </select>
-          </label>
-          <label>
-            Lab
-            <select name="lab_test_result">
-              <option value="not_tested">Not tested</option>
-              <option value="PCR_positive">PCR positive</option>
-              <option value="PCR_negative">PCR negative</option>
-              <option value="serology_positive">Serology positive</option>
-            </select>
-          </label>
-          <label>
-            Source
-            <select name="data_source">
-              <option value="Manual_Form">Manual form</option>
-              <option value="WHO_DON">WHO DON</option>
-              <option value="Contact_Trace_DB">Contact trace DB</option>
-            </select>
-          </label>
-          <button type="submit">Submit Case</button>
-        </form>
-      </section>
-
-      <section class="panel table-panel">
-        <div class="panel-heading">
-          <h2>Case Records</h2>
-          <span>Validation queue threshold: 0.75</span>
-        </div>
-        <div class="table-wrap">
-          <table>
-            <thead>
-              <tr>
-                <th>Case ID</th>
-                <th>Onset</th>
-                <th>Country</th>
-                <th>Status</th>
-                <th>Lab</th>
-                <th>Score</th>
-              </tr>
-            </thead>
-            <tbody id="caseRows"></tbody>
-          </table>
-        </div>
-      </section>
-    </main>
-
-    <script src="/app.js"></script>
-  </body>
+</body>
 </html>

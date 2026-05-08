@@ -23,6 +23,7 @@ dependencies = [
     "numpyro>=0.15.0",
     "jax[cpu]>=0.4.30",
     "arviz>=0.18.0",
+    "opensky-api>=1.3",
 ]
 
 [project.optional-dependencies]

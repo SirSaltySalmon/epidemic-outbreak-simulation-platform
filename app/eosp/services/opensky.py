@@ -95,7 +95,9 @@ def get_departures(airport_iata: str, begin_unix: int, end_unix: int) -> list[Fl
     merged: list[FlightRecord] = []
     seen: set[tuple[str, int, str | None]] = set()
     for cb, ce in _utc_day_chunks(begin_unix, end_unix):
-        for rec in _fetch_from_api(airport_iata, cb, ce):
+        # OpenSky requires end strictly greater than begin.
+        api_end = ce if ce > cb else cb + 1
+        for rec in _fetch_from_api(airport_iata, cb, api_end):
             key = (rec.callsign, rec.est_departure_time, rec.dest_airport_icao)
             if key in seen:
                 continue

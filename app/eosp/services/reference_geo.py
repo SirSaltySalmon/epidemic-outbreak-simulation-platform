@@ -47,11 +47,12 @@ def airports_for_api(country: str | None) -> list[dict[str, str]]:
         if cc and meta.get("country", "").upper() != cc:
             continue
         city = meta.get("city", "")
+        country_code = meta.get("country", "")
         rows.append({
             "iata": iata,
             "city": city,
-            "country": meta.get("country", ""),
-            "label": f"{iata} · {city}",
+            "country": country_code,
+            "label": f"{iata} · {city}" + (f" ({country_code})" if country_code else ""),
         })
     rows.sort(key=lambda x: x["iata"])
     return rows

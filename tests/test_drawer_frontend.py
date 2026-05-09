@@ -32,10 +32,11 @@ def test_simulation_complete_event_renders_stage_done_with_details():
     assert "Trajectories" in source
 
 
-def test_progress_stream_ignores_transient_eventsource_errors():
+def test_progress_stream_reports_close_before_completion_via_fetch_reader():
     source = (ROOT / "app" / "eosp" / "static" / "js" / "jobs.js").read_text(encoding="utf-8")
 
-    assert "source.readyState === EventSource.CLOSED" in source
+    assert "reader.read()" in source
+    assert "ac.abort()" in source
     assert "Progress stream closed before completion" in source
 
 

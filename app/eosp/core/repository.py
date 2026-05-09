@@ -62,7 +62,7 @@ class InMemoryRepository:
         if not self.cases:
             return 0, 0, 0, datetime.now(UTC), {}, feed_last
         confirmed, suspected, deaths, sources = case_summary_person_totals(self.cases)
-        last_updated = max(case.ingestion_timestamp for case in self.cases)
+        last_updated = max(c.record_updated_at for c in self.cases)
         return confirmed, suspected, deaths, last_updated, sources, feed_last
 
     def list_cases(self, country: str | None = None, status: CaseStatus | None = None) -> list[CaseRecord]:
@@ -86,7 +86,7 @@ class InMemoryRepository:
         if not cases:
             return [], (0, 0, 0, datetime.now(UTC), {}, feed_last)
         confirmed, suspected, deaths, sources = case_summary_person_totals(cases)
-        last_updated = max(case.ingestion_timestamp for case in cases)
+        last_updated = max(c.record_updated_at for c in cases)
         return cases, (confirmed, suspected, deaths, last_updated, sources, feed_last)
 
     def get_validation(self, case_id: UUID) -> ValidationResult | None:
@@ -94,6 +94,7 @@ class InMemoryRepository:
 
     def create_case(self, payload: CaseCreate) -> tuple[CaseRecord, ValidationResult]:
         now = datetime.now(UTC)
+        ts = payload.ingestion_timestamp or now
         case = CaseRecord(
             case_id=payload.case_id,
             patient_identifier=payload.patient_identifier,
@@ -106,7 +107,8 @@ class InMemoryRepository:
             lab_test_result=payload.lab_test_result,
             contacts=payload.contacts,
             data_source=payload.data_source,
-            ingestion_timestamp=payload.ingestion_timestamp or now,
+            ingestion_timestamp=ts,
+            record_updated_at=ts,
             validation_score=0,
             updated_by=payload.updated_by,
             updated_reason=payload.updated_reason,
@@ -138,12 +140,16 @@ class InMemoryRepository:
         if idx is None:
             raise LookupError(str(case_id))
         old = self.cases[idx]
-        merged = _merge_case_record(old, patch)
-        merged.version = old.version + 1
+        merged = _merge_case_record(old, patch).model_copy(
+            update={
+                "version": old.version + 1,
+                "record_updated_at": datetime.now(UTC),
+            }
+        )
         assert_case_cohort_consistency(merged)
         peers = [c for c in self.cases if c.case_id != case_id]
         validation = validate_case(merged, [*peers, merged])
-        merged.validation_score = validation.quality_score
+        merged = merged.model_copy(update={"validation_score": validation.quality_score})
         self.cases[idx] = merged
         self.validations[case_id] = validation
         if validation.quality_score < 0.75:
@@ -193,6 +199,7 @@ class InMemoryRepository:
             kept_id = payload.case_id
 
         now = datetime.now(UTC)
+        ts = payload.ingestion_timestamp or now
         case = CaseRecord(
             case_id=kept_id,
             patient_identifier=payload.patient_identifier,
@@ -205,7 +212,8 @@ class InMemoryRepository:
             lab_test_result=payload.lab_test_result,
             contacts=payload.contacts,
             data_source=payload.data_source,
-            ingestion_timestamp=payload.ingestion_timestamp or now,
+            ingestion_timestamp=ts,
+            record_updated_at=now,
             validation_score=0,
             updated_by=payload.updated_by,
             updated_reason=payload.updated_reason,
@@ -325,7 +333,7 @@ class SqlRepository:
                 return 0, 0, 0, datetime.now(UTC), {}, feed_last
             models = [_case_from_row(row) for row in records]
             confirmed, suspected, deaths, sources = case_summary_person_totals(models)
-            last_updated = max(row.ingestion_timestamp for row in records)
+            last_updated = max(_sql_row_latest_activity(row) for row in records)
             return confirmed, suspected, deaths, last_updated, sources, feed_last
 
     def list_cases(self, country: str | None = None, status: CaseStatus | None = None) -> list[CaseRecord]:
@@ -355,7 +363,7 @@ class SqlRepository:
                 return [], (0, 0, 0, datetime.now(UTC), {}, feed_last)
             models = [_case_from_row(row) for row in rows]
             confirmed, suspected, deaths, sources = case_summary_person_totals(models)
-            last_updated = max(row.ingestion_timestamp for row in rows)
+            last_updated = max(_sql_row_latest_activity(row) for row in rows)
             return models, (confirmed, suspected, deaths, last_updated, sources, feed_last)
 
     def get_validation(self, case_id: UUID) -> ValidationResult | None:
@@ -384,6 +392,7 @@ class SqlRepository:
 
             existing_cases = [_case_from_row(row) for row in session.query(CaseRecordRow).filter(CaseRecordRow.active.is_(True)).all()]
             now = datetime.now(UTC)
+            ts = payload.ingestion_timestamp or now
             case = CaseRecord(
                 case_id=payload.case_id,
                 patient_identifier=payload.patient_identifier,
@@ -396,7 +405,8 @@ class SqlRepository:
                 lab_test_result=payload.lab_test_result,
                 contacts=payload.contacts,
                 data_source=payload.data_source,
-                ingestion_timestamp=payload.ingestion_timestamp or now,
+                ingestion_timestamp=ts,
+                record_updated_at=ts,
                 validation_score=0,
                 updated_by=payload.updated_by,
                 updated_reason=payload.updated_reason,
@@ -474,6 +484,8 @@ class SqlRepository:
             peer_models = [_case_from_row(r) for r in peer_rows]
             validation = validate_case(merged, [*peer_models, merged])
             merged.validation_score = validation.quality_score
+            touch = datetime.now(UTC)
+            merged = merged.model_copy(update={"record_updated_at": touch})
 
             row.patient_identifier = merged.patient_identifier
             row.symptom_onset_date = merged.symptom_onset_date
@@ -494,7 +506,7 @@ class SqlRepository:
             row.cohort_deaths = merged.cohort_deaths
             row.report_period_start = merged.report_period_start
             row.report_period_end = merged.report_period_end
-            row.updated_at = datetime.now(UTC)
+            row.updated_at = touch
             session.flush()
             session.add(
                 CaseRecordHistoryRow(
@@ -642,6 +654,7 @@ class SqlRepository:
                 report_period_end=payload.report_period_end,
                 external_observation_key=payload.external_observation_key,
                 version=prev_version + 1,
+                record_updated_at=now,
             )
             validation = validate_case(case, [*peer_models, case])
             case.validation_score = validation.quality_score
@@ -670,6 +683,7 @@ class SqlRepository:
                 row.report_period_start = case.report_period_start
                 row.report_period_end = case.report_period_end
                 row.external_observation_key = case.external_observation_key
+                row.updated_at = now
             session.flush()
             session.add(
                 CaseRecordHistoryRow(
@@ -905,6 +919,12 @@ class SqlRepository:
             return changed
 
 
+def _sql_row_latest_activity(row: CaseRecordRow) -> datetime:
+    ing = row.ingestion_timestamp
+    up = getattr(row, "updated_at", None)
+    return max(ing, up) if up is not None else ing
+
+
 def _merge_case_record(base: CaseRecord, patch: CaseUpdate) -> CaseRecord:
     raw = patch.model_dump(exclude_unset=True)
     if "location_country" in raw and raw["location_country"]:
@@ -940,10 +960,12 @@ def _case_from_row(row: CaseRecordRow) -> CaseRecord:
         report_period_start=getattr(row, "report_period_start", None),
         report_period_end=getattr(row, "report_period_end", None),
         external_observation_key=getattr(row, "external_observation_key", None),
+        record_updated_at=getattr(row, "updated_at", row.ingestion_timestamp),
     )
 
 
 def _case_to_row(case: CaseRecord) -> CaseRecordRow:
+    touch = case.record_updated_at or case.ingestion_timestamp
     return CaseRecordRow(
         case_id=case.case_id,
         patient_identifier=case.patient_identifier,
@@ -967,6 +989,7 @@ def _case_to_row(case: CaseRecord) -> CaseRecordRow:
         report_period_start=case.report_period_start,
         report_period_end=case.report_period_end,
         external_observation_key=case.external_observation_key,
+        updated_at=touch,
     )
 
 

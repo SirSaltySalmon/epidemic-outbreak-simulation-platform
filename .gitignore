@@ -7,6 +7,8 @@ data/raw/openflights/*
 app/eosp/data/bundles/*.json
 app/eosp/data/bundles/*.meta.json
 !app/eosp/data/bundles/.gitkeep
+# OurAirports CSV cache (regenerate via scripts/build_airport_coords.py)
+app/eosp/data/_airports.csv
 __pycache__/
 *.py[cod]
 .pytest_cache/

@@ -65,7 +65,7 @@ def _utc_day_chunks(begin_unix: int, end_unix: int) -> list[tuple[int, int]]:
 
 
 def load_airport_coords() -> dict[str, dict[str, Any]]:
-    with _COORDS_PATH.open() as fh:
+    with _COORDS_PATH.open(encoding="utf-8") as fh:
         return json.load(fh)
 
 

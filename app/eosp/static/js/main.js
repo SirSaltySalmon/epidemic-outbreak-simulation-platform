@@ -9,6 +9,7 @@ import { renderScenarios, SCENARIOS_COMPARE_QUERY } from "./scenarios.js";
 import { initAuth } from "./auth.js";
 import { initDrawer, notifyDrawerOpened } from "./drawer.js";
 import { applyCasesList } from "./cases.js";
+import { applyTopbarUpdatedFromSummary } from "./topbar-updated.js";
 
 const _DASHBOARD_BOOTSTRAP =
   "/dashboard/bootstrap?" + SCENARIOS_COMPARE_QUERY + "&version_limit=2";
@@ -158,16 +159,6 @@ function _waitForLibs(attempts = 0) {
   });
 }
 
-function _setTopbarStatusLines(summary) {
-  const updatedAt = new Date(summary.last_updated);
-  _setText("topbar-status-updated", `Updated ${_relativeTime(updatedAt)}`);
-  const checkedRaw = summary.external_feed_last_checked_at;
-  const sub = checkedRaw != null && String(checkedRaw).trim() !== ""
-    ? `(Last checked for new cases ${_relativeTime(new Date(checkedRaw))})`
-    : `(Last checked for new cases —)`;
-  _setText("topbar-status-checked", sub);
-}
-
 function _setText(id, text) {
   const el = document.getElementById(id);
   if (el) el.textContent = text;
@@ -184,7 +175,7 @@ function _applySummaryKpis(s) {
     ? Math.round((s.total_deaths / totalRecorded) * 100) + "%"
     : "—";
   _setText("kpi-deaths-sub", `CFR ${cfr}`);
-  _setTopbarStatusLines(s);
+  applyTopbarUpdatedFromSummary(s);
 }
 
 /** @param {any} s */
@@ -236,13 +227,6 @@ function _forecastFreshnessLabel(forecast) {
     return `${n.toLocaleString()} simulations`;
   }
   return "Simulation result loaded";
-}
-
-function _relativeTime(date) {
-  const diff = Math.round((Date.now() - date.getTime()) / 1000);
-  if (diff < 60) return `${diff}s ago`;
-  if (diff < 3600) return `${Math.round(diff / 60)}m ago`;
-  return `${Math.round(diff / 3600)}h ago`;
 }
 
 boot().catch((err) => {

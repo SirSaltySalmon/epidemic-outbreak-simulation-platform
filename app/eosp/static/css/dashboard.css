@@ -62,12 +62,6 @@
   font-size: 0.78rem;
   white-space: nowrap;
 }
-.topbar-status-sub {
-  color: var(--ink-muted);
-  opacity: 0.88;
-  font-size: 0.68rem;
-  white-space: nowrap;
-}
 .version-badge {
   border: 1px solid var(--panel-border);
   border-radius: var(--radius-sm);

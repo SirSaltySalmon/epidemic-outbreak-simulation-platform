@@ -5,6 +5,7 @@
 import { post, get, patch, del } from "./api.js";
 import { getSessionToken } from "./auth.js";
 import { subscribe } from "./jobs.js";
+import { markResearchConsoleCaseDataUpdated } from "./topbar-updated.js";
 
 const SCENARIOS = [
   { id: "baseline",                      label: "Baseline" },
@@ -404,6 +405,7 @@ async function _deleteCaseRow(caseId, onRunComplete) {
       _editingCaseId = null;
       _prefillCase = null;
     }
+    markResearchConsoleCaseDataUpdated();
     if (typeof onRunComplete === "function") onRunComplete();
     await _renderIdle(onRunComplete);
   } catch (err) {
@@ -486,6 +488,7 @@ async function _submitCase(ev, form, onRunComplete) {
     const ds = form.querySelector('input[name="data_source"]');
     if (ds) ds.value = "Manual_Form";
     _syncAirportSelect(form, "");
+    markResearchConsoleCaseDataUpdated();
     if (typeof onRunComplete === "function") onRunComplete();
     await _renderIdle(onRunComplete);
   } catch (err) {

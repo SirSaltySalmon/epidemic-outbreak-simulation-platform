@@ -92,10 +92,10 @@ def _detect_countries(text: str) -> list[str]:
 
 
 def _pick_country(codes: list[str]) -> str:
-    if len(codes) == 1:
+    if len(codes) >= 1:
+        # _detect_country lists alias hits first (e.g. South Africa→ZA); ISO \b XX \b
+        # scans can duplicate story words (“in …”, “as …”) so prefer that order.
         return codes[0]
-    if len(codes) > 1:
-        return "CV"
     return "CV"
 
 

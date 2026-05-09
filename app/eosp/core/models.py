@@ -62,6 +62,8 @@ class CaseRecord(BaseModel):
     report_period_start: date | None = None
     report_period_end: date | None = None
     external_observation_key: str | None = Field(default=None, max_length=128)
+    #: Last time this row was created or updated in EOSP (dashboard “Updated …” freshness).
+    record_updated_at: datetime
 
 
 class CaseCreate(BaseModel):

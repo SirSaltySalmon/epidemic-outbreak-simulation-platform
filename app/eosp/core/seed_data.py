@@ -33,6 +33,7 @@ CASES = [
         contacts=[{"id": "anon_p0002", "type": "household"}],
         data_source="WHO_DON",
         ingestion_timestamp=_utc("2026-05-06T08:00:00Z"),
+        record_updated_at=_utc("2026-05-06T08:00:00Z"),
         validation_score=0.94,
     ),
     CaseRecord(
@@ -48,6 +49,7 @@ CASES = [
         contacts=[{"id": "anon_p0001", "type": "household"}],
         data_source="Manual_Form",
         ingestion_timestamp=_utc("2026-05-06T08:30:00Z"),
+        record_updated_at=_utc("2026-05-06T08:30:00Z"),
         validation_score=0.82,
     ),
     CaseRecord(
@@ -63,6 +65,7 @@ CASES = [
         contacts=[],
         data_source="WHO_DON",
         ingestion_timestamp=_utc("2026-05-06T09:00:00Z"),
+        record_updated_at=_utc("2026-05-06T09:00:00Z"),
         validation_score=0.91,
     ),
     CaseRecord(
@@ -78,6 +81,7 @@ CASES = [
         contacts=[],
         data_source="Contact_Trace_DB",
         ingestion_timestamp=_utc("2026-05-06T10:00:00Z"),
+        record_updated_at=_utc("2026-05-06T10:00:00Z"),
         validation_score=0.79,
     ),
     CaseRecord(
@@ -93,6 +97,7 @@ CASES = [
         contacts=[],
         data_source="WHO_DON",
         ingestion_timestamp=_utc("2026-05-06T11:00:00Z"),
+        record_updated_at=_utc("2026-05-06T11:00:00Z"),
         validation_score=0.93,
     ),
     CaseRecord(
@@ -108,6 +113,7 @@ CASES = [
         contacts=[],
         data_source="Manual_Form",
         ingestion_timestamp=_utc("2026-05-06T12:00:00Z"),
+        record_updated_at=_utc("2026-05-06T12:00:00Z"),
         validation_score=0.76,
     ),
     CaseRecord(
@@ -123,6 +129,7 @@ CASES = [
         contacts=[],
         data_source="Manual_Form",
         ingestion_timestamp=_utc("2026-05-06T13:00:00Z"),
+        record_updated_at=_utc("2026-05-06T13:00:00Z"),
         validation_score=0.74,
     ),
     CaseRecord(
@@ -138,6 +145,7 @@ CASES = [
         contacts=[],
         data_source="WHO_DON",
         ingestion_timestamp=_utc("2026-05-07T14:32:00Z"),
+        record_updated_at=_utc("2026-05-07T14:32:00Z"),
         validation_score=0.86,
     ),
 ]

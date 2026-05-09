@@ -169,17 +169,29 @@ function _airportLatLng(geoData, iata) {
   return null;
 }
 
+function _abmBucketCumulativeBlock(stats) {
+  if (!stats) return null;
+  if (typeof stats.median === "number") return stats;
+  if (stats.cumulative_infected) return stats.cumulative_infected;
+  return null;
+}
+
 function _renderAbmSimulationLayer(data, geoForecast) {
   if (!geoForecast || !geoForecast.by_day || !geoForecast.by_day.length) return;
   const lastDay = geoForecast.by_day[geoForecast.by_day.length - 1];
   const entries = Object.entries(lastDay.buckets).filter(([k]) => k !== "ship");
-  const medians = entries.map(([, v]) => v.median);
+  const medians = entries
+    .map(([, v]) => _abmBucketCumulativeBlock(v))
+    .filter((b) => b != null)
+    .map((b) => b.median);
   const mx = Math.max(...medians, 1);
   for (const [code, stats] of entries) {
+    const block = _abmBucketCumulativeBlock(stats);
+    if (!block) continue;
     const iata = code.includes("_") ? code.split("_").pop() : code;
     const ll = _airportLatLng(data, iata);
     if (!ll) continue;
-    const r = 6 + Math.round((stats.median / mx) * 22);
+    const r = 6 + Math.round((block.median / mx) * 22);
     const m = L.circleMarker(ll, {
       radius: r,
       color: "#69f0ae",
@@ -188,8 +200,8 @@ function _renderAbmSimulationLayer(data, geoForecast) {
       fillOpacity: 0.45,
     }    ).bindPopup(
       `<strong>Simulation · ${iata} cluster</strong><br>` +
-      `Median cumulative infected in bucket (E+I+R+D), day ${lastDay.day}: <strong>${stats.median}</strong><br>` +
-      `95% CI: ${stats.ci_95_lower}–${stats.ci_95_upper}<br>` +
+      `Median cumulative infected in bucket (E+I+R+D), day ${lastDay.day}: <strong>${block.median}</strong><br>` +
+      `95% CI: ${block.ci_95_lower}–${block.ci_95_upper}<br>` +
       `<em>From ship-network ABM ensemble — independent of the orange heat layer.</em>`
     ).addTo(_map);
     _abmMarkers.push(m);

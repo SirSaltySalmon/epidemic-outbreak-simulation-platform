@@ -21,7 +21,12 @@ import numpy as np
 
 from eosp.core.models import ForecastPoint, ForecastResponse, InferenceResult
 from eosp.services.abm import SeedState, Trajectory, simulate_trajectory
-from eosp.services.geo_buckets import GEO_BUCKET_METRIC_DETAIL, GEO_BUCKET_METRIC_ID
+from eosp.services.geo_buckets import (
+    GEO_BUCKET_METRIC_DETAIL,
+    GEO_BUCKET_METRIC_ID,
+    GEO_BUCKET_METRIC_INFECTIOUS_I_DETAIL,
+    GEO_BUCKET_METRIC_INFECTIOUS_I_ID,
+)
 from eosp.services.network import ContactNetwork
 from eosp.services.scenarios import ScenarioSpec
 
@@ -328,16 +333,31 @@ def _aggregate_geo_forecast(
         return None
     labels = first.geo_bucket_labels
     try:
-        stacked = np.stack([cast(np.ndarray, t.bucket_cumulative_infected) for t in traj_list])
+        stacked_cum = np.stack([cast(np.ndarray, t.bucket_cumulative_infected) for t in traj_list])
+    except ValueError:
+        return None
+    inf_arrays: list[np.ndarray] = []
+    for t in traj_list:
+        cum = cast(np.ndarray, t.bucket_cumulative_infected)
+        if t.bucket_infectious_I is None:
+            inf_arrays.append(np.zeros_like(cum))
+        else:
+            inf_arrays.append(np.asarray(t.bucket_infectious_I))
+    try:
+        stacked_inf = np.stack(inf_arrays)
     except ValueError:
         return None
     # (n_sim, n_days+1, n_buckets)
     by_day: list[dict[str, Any]] = []
     for day in range(1, n_days + 1):
-        buckets: dict[str, dict[str, float]] = {}
+        buckets: dict[str, Any] = {}
         for bi, label in enumerate(labels):
-            day_vals = stacked[:, day, bi]
-            buckets[label] = _percentile_block(day_vals.astype(float), include_50=True)
+            day_vals_cum = stacked_cum[:, day, bi].astype(float)
+            day_vals_inf = stacked_inf[:, day, bi].astype(float)
+            buckets[label] = {
+                "cumulative_infected": _percentile_block(day_vals_cum, include_50=True),
+                "infectious_I": _percentile_block(day_vals_inf, include_50=True),
+            }
         by_day.append(
             {
                 "day": day,
@@ -347,12 +367,16 @@ def _aggregate_geo_forecast(
         )
     return {
         "bucket_order": list(labels),
+        "metrics": [
+            {"id": GEO_BUCKET_METRIC_ID, "detail": GEO_BUCKET_METRIC_DETAIL},
+            {"id": GEO_BUCKET_METRIC_INFECTIOUS_I_ID, "detail": GEO_BUCKET_METRIC_INFECTIOUS_I_DETAIL},
+        ],
         "metric": GEO_BUCKET_METRIC_ID,
         "metric_detail": GEO_BUCKET_METRIC_DETAIL,
         "source": "abm_monte_carlo",
         "distinct_from": (
-            "risk_heatmap on /geo/outbreak uses OpenSky flight-ring heuristics "
-            "scaled by inferred p_transmit, not these bucket counts."
+            "Legacy OpenSky ring heat on /geo/outbreak and optional abm_geo paths "
+            "use flight heuristics or alternate exports, not these ABM bucket percentiles."
         ),
         "by_day": by_day,
     }

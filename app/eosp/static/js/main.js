@@ -6,10 +6,12 @@ import { get } from "./api.js";
 import { initMap, renderGeoData } from "./map.js";
 import { renderForecast, purgeForecastChart } from "./chart.js";
 import { renderScenarios, SCENARIOS_COMPARE_QUERY } from "./scenarios.js";
+import { initAuth } from "./auth.js";
 import { initDrawer, notifyDrawerOpened } from "./drawer.js";
 import { applyCasesList } from "./cases.js";
 
 async function boot() {
+  await initAuth();
   // Wait for CDN libraries (Leaflet and Plotly use defer, so they may not
   // be ready immediately when the module executes on fast connections)
   await _waitForLibs();
@@ -89,7 +91,7 @@ async function boot() {
   }
 
   // Researcher drawer wiring
-  initDrawer(_onRunComplete);
+  await initDrawer(_onRunComplete);
   _wireDrawerToggle();
 }
 

@@ -96,6 +96,48 @@ class CaseCreate(BaseModel):
         return self
 
 
+class CaseUpdate(BaseModel):
+    """Partial update for researcher PATCH; omitted fields stay unchanged."""
+
+    patient_identifier: str | None = None
+    symptom_onset_date: date | None = None
+    hospitalization_date: date | None = None
+    death_date: date | None = None
+    location_country: str | None = Field(default=None, min_length=2, max_length=2)
+    location_airport_code: str | None = Field(default=None, min_length=3, max_length=3)
+    confirmed_or_suspected: CaseStatus | None = None
+    lab_test_result: LabResult | None = None
+    contacts: list[dict[str, Any]] | None = None
+    data_source: str | None = None
+    updated_by: str = "api"
+    updated_reason: str = "case_update"
+    observation_kind: ObservationKind | None = None
+    cohort_size: int | None = Field(default=None, ge=1)
+    cohort_deaths: int | None = Field(default=None, ge=0)
+    report_period_start: date | None = None
+    report_period_end: date | None = None
+
+    @model_validator(mode="after")
+    def _partial_cohort_rules(self) -> CaseUpdate:
+        kind = self.observation_kind
+        if kind == ObservationKind.INDIVIDUAL:
+            if self.cohort_size is not None and self.cohort_size != 1:
+                raise ValueError("individual observations require cohort_size == 1")
+            if self.cohort_deaths is not None and self.cohort_deaths != 0:
+                raise ValueError("individual observations use death_date, not cohort_deaths")
+        return self
+
+
+def assert_case_cohort_consistency(record: CaseRecord) -> None:
+    """Shared cohort vs individual rules after create or merge."""
+
+    if record.observation_kind == ObservationKind.INDIVIDUAL:
+        if record.cohort_size != 1:
+            raise ValueError("individual observations require cohort_size == 1")
+        if record.cohort_deaths != 0:
+            raise ValueError("individual observations use death_date, not cohort_deaths")
+
+
 class CaseIngestionResponse(BaseModel):
     case: CaseRecord
     validation: ValidationResult

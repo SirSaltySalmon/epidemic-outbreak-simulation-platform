@@ -11,6 +11,7 @@ from eosp.core.models import (
     CaseCreate,
     CaseRecord,
     CaseStatus,
+    CaseUpdate,
     ForecastResponse,
     ForecastRunItem,
     ForecastRunResponse,
@@ -19,6 +20,7 @@ from eosp.core.models import (
     ObservationKind,
     QualityAlert,
     ValidationResult,
+    assert_case_cohort_consistency,
 )
 from eosp.core.tables import (
     CaseRecordHistoryRow,
@@ -106,6 +108,40 @@ class InMemoryRepository:
         if validation.quality_score < 0.75:
             self.alerts.append(_alert_for_validation(case, validation))
         return case, validation
+
+    def get_case(self, case_id: UUID) -> CaseRecord | None:
+        for case in self.cases:
+            if case.case_id == case_id:
+                return case
+        return None
+
+    def update_case(self, case_id: UUID, patch: CaseUpdate) -> tuple[CaseRecord, ValidationResult]:
+        if not patch.model_dump(exclude_unset=True):
+            raise ValueError("no fields to update")
+        idx = next((i for i, c in enumerate(self.cases) if c.case_id == case_id), None)
+        if idx is None:
+            raise LookupError(str(case_id))
+        old = self.cases[idx]
+        merged = _merge_case_record(old, patch)
+        merged.version = old.version + 1
+        assert_case_cohort_consistency(merged)
+        peers = [c for c in self.cases if c.case_id != case_id]
+        validation = validate_case(merged, [*peers, merged])
+        merged.validation_score = validation.quality_score
+        self.cases[idx] = merged
+        self.validations[case_id] = validation
+        if validation.quality_score < 0.75:
+            self.alerts.append(_alert_for_validation(merged, validation))
+        return merged, validation
+
+    def delete_case(self, case_id: UUID) -> bool:
+        for i, c in enumerate(self.cases):
+            if c.case_id == case_id:
+                self.cases.pop(i)
+                self.validations.pop(case_id, None)
+                self.alerts[:] = [a for a in self.alerts if a.case_id != case_id]
+                return True
+        return False
 
     def upsert_external_observation(self, payload: CaseCreate) -> tuple[CaseRecord, ValidationResult, bool]:
         if not payload.external_observation_key:
@@ -375,6 +411,110 @@ class SqlRepository:
             )
             session.commit()
             return case, validation
+
+    def get_case(self, case_id: UUID) -> CaseRecord | None:
+        with self.session_factory() as session:
+            row = session.get(CaseRecordRow, case_id)
+            if row is None or not row.active:
+                return None
+            return _case_from_row(row)
+
+    def update_case(self, case_id: UUID, patch: CaseUpdate) -> tuple[CaseRecord, ValidationResult]:
+        if not patch.model_dump(exclude_unset=True):
+            raise ValueError("no fields to update")
+        with self.session_factory() as session:
+            row = session.get(CaseRecordRow, case_id)
+            if row is None or not row.active:
+                raise LookupError(str(case_id))
+            old = _case_from_row(row)
+            merged = _merge_case_record(old, patch)
+            merged.version = old.version + 1
+            assert_case_cohort_consistency(merged)
+            peer_rows = [
+                r
+                for r in session.query(CaseRecordRow).filter(CaseRecordRow.active.is_(True)).all()
+                if r.case_id != case_id
+            ]
+            peer_models = [_case_from_row(r) for r in peer_rows]
+            validation = validate_case(merged, [*peer_models, merged])
+            merged.validation_score = validation.quality_score
+
+            row.patient_identifier = merged.patient_identifier
+            row.symptom_onset_date = merged.symptom_onset_date
+            row.hospitalization_date = merged.hospitalization_date
+            row.death_date = merged.death_date
+            row.location_country = merged.location_country
+            row.location_airport_code = merged.location_airport_code
+            row.confirmed_or_suspected = merged.confirmed_or_suspected.value
+            row.lab_test_result = merged.lab_test_result.value
+            row.contacts = merged.contacts
+            row.data_source = merged.data_source
+            row.validation_score = merged.validation_score
+            row.version = merged.version
+            row.updated_by = merged.updated_by
+            row.updated_reason = merged.updated_reason
+            row.observation_kind = merged.observation_kind.value
+            row.cohort_size = merged.cohort_size
+            row.cohort_deaths = merged.cohort_deaths
+            row.report_period_start = merged.report_period_start
+            row.report_period_end = merged.report_period_end
+            row.updated_at = datetime.now(UTC)
+            session.flush()
+            session.add(
+                CaseRecordHistoryRow(
+                    case_id=merged.case_id,
+                    case_data_json=merged.model_dump(mode="json"),
+                    source=merged.data_source,
+                    validation_score=merged.validation_score,
+                    change_reason=merged.updated_reason,
+                    changed_by=merged.updated_by,
+                    parent_version_id=merged.version,
+                )
+            )
+            session.add(
+                ValidationResultRow(
+                    validation_id=uuid4(),
+                    case_id=merged.case_id,
+                    checks_passed=validation.checks_passed,
+                    issues=validation.issues,
+                    quality_score=validation.quality_score,
+                    quarantine_status=validation.quarantine_status,
+                )
+            )
+            if validation.quality_score < 0.75:
+                session.add(_alert_to_row(_alert_for_validation(merged, validation)))
+            session.add(
+                UserActionRow(
+                    user_id=merged.updated_by,
+                    action_type="update_case",
+                    resource_type="case",
+                    resource_id=str(merged.case_id),
+                    details={"validation_score": merged.validation_score, "quarantine_status": validation.quarantine_status},
+                    ip_address=None,
+                )
+            )
+            session.commit()
+            return merged, validation
+
+    def delete_case(self, case_id: UUID) -> bool:
+        with self.session_factory() as session:
+            row = session.get(CaseRecordRow, case_id)
+            if row is None or not row.active:
+                return False
+            row.active = False
+            row.updated_at = datetime.now(UTC)
+            session.add(
+                UserActionRow(
+                    user_id="researcher_console",
+                    action_type="delete_case",
+                    resource_type="case",
+                    resource_id=str(case_id),
+                    details={},
+                    ip_address=None,
+                )
+            )
+            session.commit()
+            return True
 
     def upsert_external_observation(self, payload: CaseCreate) -> tuple[CaseRecord, ValidationResult, bool]:
         if not payload.external_observation_key:
@@ -727,6 +867,16 @@ class SqlRepository:
                 row.last_changed_at = now
             session.commit()
             return changed
+
+
+def _merge_case_record(base: CaseRecord, patch: CaseUpdate) -> CaseRecord:
+    raw = patch.model_dump(exclude_unset=True)
+    if "location_country" in raw and raw["location_country"]:
+        raw["location_country"] = str(raw["location_country"]).upper()
+    if "location_airport_code" in raw:
+        la = raw["location_airport_code"]
+        raw["location_airport_code"] = la.upper() if la else None
+    return base.model_copy(update=raw)
 
 
 def _case_from_row(row: CaseRecordRow) -> CaseRecord:

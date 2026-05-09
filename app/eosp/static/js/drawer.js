@@ -2,7 +2,8 @@
  * Researcher drawer: idle and running states.
  * Manages stage cards, SSE subscription, mini Plotly charts.
  */
-import { post, get } from "./api.js";
+import { post, get, patch, del } from "./api.js";
+import { getSessionToken } from "./auth.js";
 import { subscribe } from "./jobs.js";
 
 const SCENARIOS = [
@@ -25,6 +26,26 @@ let _lastRun = null;
 let _inferenceEtaTick = null;
 let _onRunCompleteCb = null;
 let _stageData = new Map();
+let _refCountries = [];
+let _refAirportsAll = [];
+/** @type {string | null} */
+let _editingCaseId = null;
+/** @type {Record<string, unknown> | null} */
+let _prefillCase = null;
+
+async function _loadReferenceGeo() {
+  try {
+    const [cRes, aRes] = await Promise.all([
+      get("/reference/countries"),
+      get("/reference/airports"),
+    ]);
+    _refCountries = cRes.countries || [];
+    _refAirportsAll = aRes.airports || [];
+  } catch (_) {
+    _refCountries = [];
+    _refAirportsAll = [];
+  }
+}
 
 function _clearInferenceEtaTicker() {
   if (_inferenceEtaTick) {
@@ -67,9 +88,10 @@ function _simEtaLine(data) {
   return "";
 }
 
-export function initDrawer(onRunComplete) {
+export async function initDrawer(onRunComplete) {
+  await _loadReferenceGeo();
   _onRunCompleteCb = onRunComplete;
-  _renderIdle(onRunComplete);
+  await _renderIdle(onRunComplete);
 }
 
 /** Call when the researcher drawer opens: resume SSE if a pipeline job is already running. */
@@ -93,6 +115,7 @@ async function _tryAttachActiveJob(onRunComplete) {
       _renderRunning();
       _cancelSSE = subscribe(
         job.job_id,
+        getSessionToken,
         (event) => _handleEvent(event),
         (event) => _handleComplete(event, job.job_id, onRunComplete),
       );
@@ -102,7 +125,7 @@ async function _tryAttachActiveJob(onRunComplete) {
   }
 }
 
-function _renderIdle(onRunComplete) {
+async function _renderIdle(onRunComplete) {
   _clearInferenceEtaTicker();
   const body = document.getElementById("drawer-body");
   body.innerHTML = "";
@@ -137,9 +160,311 @@ function _renderIdle(onRunComplete) {
     body.appendChild(section);
   }
 
+  body.appendChild(_caseIntakeSection(onRunComplete));
+  body.appendChild(await _manageCasesSection(onRunComplete));
+
   // Download links
   const dlSection = _section("Downloads", _downloadLinks());
   body.appendChild(dlSection);
+}
+
+function _optionalDateStr(value) {
+  const s = value != null && String(value).trim();
+  return s ? s : null;
+}
+
+function _escapeHtml(s) {
+  return String(s ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+
+function _countrySelectOptions() {
+  const head = '<option value="">— Select country —</option>';
+  if (!_refCountries.length) return head;
+  return (
+    head +
+    _refCountries.map((c) => `<option value="${c.code}">${c.code} — ${c.name}</option>`).join("")
+  );
+}
+
+function _syncAirportSelect(form, preserveIata) {
+  const country = String(form.querySelector('[name="location_country"]')?.value || "").trim();
+  const aptSel = form.querySelector('[name="location_airport_code"]');
+  if (!aptSel || aptSel.tagName !== "SELECT") return;
+  const list = country ? _refAirportsAll.filter((a) => a.country === country) : [];
+  aptSel.innerHTML =
+    '<option value="">— Optional airport —</option>' +
+    list.map((a) => `<option value="${a.iata}">${a.label}</option>`).join("");
+  const keep = preserveIata && list.some((a) => a.iata === preserveIata) ? preserveIata : "";
+  if (keep) aptSel.value = keep;
+}
+
+function _applyCohortFieldVisibility(form) {
+  const kind = form.querySelector('[name="observation_kind"]')?.value || "individual";
+  const cohortBlock = form.querySelector(".cohort-only-fields");
+  const deathRow = form.querySelector(".death-date-field");
+  if (cohortBlock) cohortBlock.hidden = kind !== "cohort";
+  if (deathRow) deathRow.hidden = kind === "cohort";
+}
+
+function _applyPrefillToForm(form) {
+  if (!_prefillCase) return;
+  const p = _prefillCase;
+  form.querySelector('[name="patient_identifier"]').value = p.patient_identifier ?? "";
+  form.querySelector('[name="symptom_onset_date"]').value = String(p.symptom_onset_date || "").slice(0, 10);
+  form.querySelector('[name="hospitalization_date"]').value = p.hospitalization_date
+    ? String(p.hospitalization_date).slice(0, 10)
+    : "";
+  form.querySelector('[name="death_date"]').value = p.death_date ? String(p.death_date).slice(0, 10) : "";
+  form.querySelector('[name="location_country"]').value = (p.location_country || "").toUpperCase();
+  _syncAirportSelect(form, p.location_airport_code || "");
+  form.querySelector('[name="confirmed_or_suspected"]').value = p.confirmed_or_suspected || "suspected";
+  form.querySelector('[name="lab_test_result"]').value = p.lab_test_result || "not_tested";
+  form.querySelector('[name="data_source"]').value = p.data_source || "Manual_Form";
+  const obs = p.observation_kind || "individual";
+  form.querySelector('[name="observation_kind"]').value = obs;
+  if (obs === "cohort") {
+    form.querySelector('[name="cohort_size"]').value = String(p.cohort_size ?? "");
+    form.querySelector('[name="cohort_deaths"]').value = String(p.cohort_deaths ?? "");
+    form.querySelector('[name="report_period_start"]').value = p.report_period_start
+      ? String(p.report_period_start).slice(0, 10)
+      : "";
+    form.querySelector('[name="report_period_end"]').value = p.report_period_end
+      ? String(p.report_period_end).slice(0, 10)
+      : "";
+  }
+  _applyCohortFieldVisibility(form);
+  const sub = form.querySelector(".btn-case-submit");
+  const can = form.querySelector(".btn-case-cancel");
+  if (sub) sub.textContent = _editingCaseId ? "Save changes" : "Add case to database";
+  if (can) can.hidden = !_editingCaseId;
+}
+
+function _caseIntakeSection(onRunComplete) {
+  const form = document.createElement("form");
+  form.className = "case-intake-form";
+  form.innerHTML = `
+    <div class="case-field-grid">
+      <label class="case-field case-field-span">Observation
+        <select name="observation_kind">
+          <option value="individual">Individual</option>
+          <option value="cohort">Cohort / aggregate</option>
+        </select>
+      </label>
+      <label class="case-field">Patient ID
+        <input name="patient_identifier" type="text" required maxlength="120" autocomplete="off" />
+      </label>
+      <label class="case-field">Symptom onset
+        <input name="symptom_onset_date" type="date" required />
+      </label>
+      <label class="case-field">Country
+        <select name="location_country" required>${_countrySelectOptions()}</select>
+      </label>
+      <label class="case-field">Airport
+        <select name="location_airport_code"></select>
+      </label>
+      <label class="case-field">Status
+        <select name="confirmed_or_suspected">
+          <option value="confirmed">Confirmed</option>
+          <option value="suspected">Suspected</option>
+        </select>
+      </label>
+      <label class="case-field">Lab result
+        <select name="lab_test_result">
+          <option value="not_tested">Not tested</option>
+          <option value="PCR_positive">PCR positive</option>
+          <option value="PCR_negative">PCR negative</option>
+          <option value="serology_positive">Serology positive</option>
+        </select>
+      </label>
+      <label class="case-field">Hospitalization
+        <input name="hospitalization_date" type="date" />
+      </label>
+      <label class="case-field death-date-field">Death (individual)
+        <input name="death_date" type="date" />
+      </label>
+      <div class="cohort-only-fields case-field-span cohort-only-grid" hidden>
+        <label class="case-field">Cohort size
+          <input name="cohort_size" type="number" min="1" step="1" value="1" />
+        </label>
+        <label class="case-field">Cohort deaths
+          <input name="cohort_deaths" type="number" min="0" step="1" value="0" />
+        </label>
+        <label class="case-field">Report period start
+          <input name="report_period_start" type="date" />
+        </label>
+        <label class="case-field">Report period end
+          <input name="report_period_end" type="date" />
+        </label>
+      </div>
+      <label class="case-field case-field-span">Data source
+        <input name="data_source" type="text" value="Manual_Form" required />
+      </label>
+    </div>
+    <div class="case-form-actions">
+      <button type="submit" class="btn-case-submit">Add case to database</button>
+      <button type="button" class="btn-case-cancel" hidden>Cancel edit</button>
+    </div>
+    <p class="case-intake-hint" id="case-intake-msg" aria-live="polite"></p>
+  `;
+  form.querySelector('[name="location_country"]').addEventListener("change", () => {
+    _syncAirportSelect(form, "");
+  });
+  form.querySelector('[name="observation_kind"]').addEventListener("change", () => {
+    _applyCohortFieldVisibility(form);
+  });
+  _syncAirportSelect(form, "");
+  _applyPrefillToForm(form);
+  form.querySelector(".btn-case-cancel").addEventListener("click", () => {
+    _editingCaseId = null;
+    _prefillCase = null;
+    void _renderIdle(onRunComplete);
+  });
+  form.addEventListener("submit", (ev) => _submitCase(ev, form, onRunComplete));
+  return _section("Record new case", form);
+}
+
+async function _manageCasesSection(onRunComplete) {
+  const holder = document.createElement("div");
+  holder.className = "manage-cases-inner";
+  holder.innerHTML = `<p class="case-intake-hint">Loading cases…</p>`;
+  try {
+    const rows = await get("/cases");
+    holder.innerHTML = "";
+    if (!Array.isArray(rows) || rows.length === 0) {
+      holder.innerHTML = `<p class="case-intake-hint">No cases in the current dataset.</p>`;
+      return _section("Manage cases", holder);
+    }
+    const tbl = document.createElement("table");
+    tbl.className = "manage-cases-table";
+    tbl.innerHTML =
+      "<thead><tr><th>Case</th><th>Patient</th><th>Onset</th><th>Loc</th><th></th></tr></thead>";
+    const tb = document.createElement("tbody");
+    for (const row of rows) {
+      const tr = document.createElement("tr");
+      const idShort = String(row.case_id || "").slice(0, 8);
+      tr.innerHTML = `<td title="${row.case_id}">${idShort}…</td><td>${_escapeHtml(row.patient_identifier)}</td><td>${String(row.symptom_onset_date || "").slice(0, 10)}</td><td>${row.location_country || ""}${row.location_airport_code ? " · " + row.location_airport_code : ""}</td><td class="manage-cases-actions"></td>`;
+      const actions = tr.querySelector(".manage-cases-actions");
+      const bEdit = document.createElement("button");
+      bEdit.type = "button";
+      bEdit.className = "btn-manage btn-edit";
+      bEdit.textContent = "Edit";
+      bEdit.addEventListener("click", () => {
+        _prefillCase = row;
+        _editingCaseId = row.case_id;
+        void _renderIdle(onRunComplete);
+      });
+      const bDel = document.createElement("button");
+      bDel.type = "button";
+      bDel.className = "btn-manage btn-delete";
+      bDel.textContent = "Delete";
+      bDel.addEventListener("click", () => void _deleteCaseRow(row.case_id, onRunComplete));
+      actions.appendChild(bEdit);
+      actions.appendChild(bDel);
+      tb.appendChild(tr);
+    }
+    tbl.appendChild(tb);
+    holder.appendChild(tbl);
+  } catch (e) {
+    holder.innerHTML = `<p class="case-intake-hint">Could not load cases (${e && e.message ? e.message : String(e)}).</p>`;
+  }
+  return _section("Manage cases", holder);
+}
+
+async function _deleteCaseRow(caseId, onRunComplete) {
+  if (!confirm("Delete this case from the database? This cannot be undone from the UI.")) return;
+  try {
+    await del(`/cases/${caseId}`);
+    if (_editingCaseId === caseId) {
+      _editingCaseId = null;
+      _prefillCase = null;
+    }
+    if (typeof onRunComplete === "function") onRunComplete();
+    await _renderIdle(onRunComplete);
+  } catch (err) {
+    alert("Delete failed: " + (err && err.message ? err.message : String(err)));
+  }
+}
+
+async function _submitCase(ev, form, onRunComplete) {
+  ev.preventDefault();
+  const msg = form.querySelector("#case-intake-msg");
+  if (msg) msg.textContent = "";
+
+  const fd = new FormData(form);
+  const country = String(fd.get("location_country") || "").trim().toUpperCase();
+  if (country.length !== 2) {
+    alert("Select a country.");
+    return;
+  }
+  let apt = String(fd.get("location_airport_code") || "").trim().toUpperCase();
+  if (apt.length > 0 && apt.length !== 3) {
+    alert("Airport must be a valid three-letter code or empty.");
+    return;
+  }
+
+  const kind = fd.get("observation_kind") || "individual";
+  const basePayload = {
+    patient_identifier: String(fd.get("patient_identifier") || "").trim(),
+    symptom_onset_date: fd.get("symptom_onset_date"),
+    hospitalization_date: _optionalDateStr(fd.get("hospitalization_date")),
+    location_country: country,
+    location_airport_code: apt.length === 3 ? apt : null,
+    confirmed_or_suspected: fd.get("confirmed_or_suspected"),
+    lab_test_result: fd.get("lab_test_result"),
+    contacts: [],
+    data_source: String(fd.get("data_source") || "Manual_Form").trim() || "Manual_Form",
+    updated_by: "researcher_console",
+    observation_kind: kind,
+  };
+
+  if (kind === "cohort") {
+    basePayload.death_date = null;
+    basePayload.cohort_size = Number(fd.get("cohort_size") || 1);
+    basePayload.cohort_deaths = Number(fd.get("cohort_deaths") || 0);
+    basePayload.report_period_start = _optionalDateStr(fd.get("report_period_start"));
+    basePayload.report_period_end = _optionalDateStr(fd.get("report_period_end"));
+  } else {
+    basePayload.death_date = _optionalDateStr(fd.get("death_date"));
+    basePayload.cohort_size = 1;
+    basePayload.cohort_deaths = 0;
+    basePayload.report_period_start = null;
+    basePayload.report_period_end = null;
+  }
+
+  if (!basePayload.patient_identifier) {
+    alert("Patient ID is required.");
+    return;
+  }
+
+  try {
+    let res;
+    if (_editingCaseId) {
+      basePayload.updated_reason = "manual_console_edit";
+      res = await patch(`/cases/${_editingCaseId}`, basePayload);
+    } else {
+      basePayload.updated_reason = "manual_console_intake";
+      res = await post("/cases", basePayload);
+    }
+    const wasEdit = !!_editingCaseId;
+    const accepted = res.accepted_for_inference === true;
+    if (msg) {
+      msg.textContent = accepted
+        ? wasEdit
+          ? "Case updated and accepted for inference."
+          : "Case saved and accepted for inference."
+        : `Saved (quality ${(res.validation?.quality_score ?? 0).toFixed(2)}).`;
+    }
+    _editingCaseId = null;
+    _prefillCase = null;
+    form.reset();
+    const ds = form.querySelector('input[name="data_source"]');
+    if (ds) ds.value = "Manual_Form";
+    _syncAirportSelect(form, "");
+    if (typeof onRunComplete === "function") onRunComplete();
+    await _renderIdle(onRunComplete);
+  } catch (err) {
+    alert("Could not save case: " + (err && err.message ? err.message : String(err)));
+  }
 }
 
 async function _syncRunButtonWithActivePipeline() {
@@ -198,6 +523,7 @@ async function _startRun(onRunComplete) {
       if (aid) {
         _cancelSSE = subscribe(
           aid,
+          getSessionToken,
           (event) => _handleEvent(event),
           (event) => _handleComplete(event, aid, onRunComplete),
         );
@@ -206,12 +532,13 @@ async function _startRun(onRunComplete) {
     }
     alert("Failed to start run: " + (err && err.message ? err.message : String(err)));
     _setRunButtonDisabled(false);
-    _renderIdle(onRunComplete);
+    await _renderIdle(onRunComplete);
     return;
   }
 
   _cancelSSE = subscribe(
     jobId,
+    getSessionToken,
     (event) => _handleEvent(event),
     (event) => _handleComplete(event, jobId, onRunComplete),
   );
@@ -327,7 +654,7 @@ function _updateStage(n, state, data) {
     const again = card.querySelector(".btn-another-run");
     if (again)
       again.addEventListener("click", () => {
-        _renderIdle(_onRunCompleteCb);
+        void _renderIdle(_onRunCompleteCb);
       });
   }
 }

@@ -4,6 +4,7 @@ from shutil import copyfile
 from fastapi.testclient import TestClient
 import pytest
 
+from eosp.api.deps import require_clerk_session
 from eosp.core.repository import InMemoryRepository
 from eosp.core.seed_data import ALERTS, CASES, INFERENCES, VALIDATIONS
 from eosp.core.settings import get_settings
@@ -43,7 +44,12 @@ def _run_forecasts(*scenarios: str, n_simulations: int = 100) -> None:
 
 
 @pytest.fixture(autouse=True)
-def reset_app_repository():
+def reset_app_repository(monkeypatch):
+    """Tests bypass Clerk JWT; host `.env` may still set ``EOSP_CLERK_*``."""
+    monkeypatch.setenv("EOSP_CLERK_FRONTEND_API", "")
+    monkeypatch.delenv("EOSP_CLERK_FRONTEND_API", raising=False)
+    get_settings.cache_clear()
+    app.dependency_overrides[require_clerk_session] = lambda: None
     _FORECAST_CACHE.clear()
     app.state.repository = InMemoryRepository(
         cases=list(CASES),
@@ -59,6 +65,7 @@ def reset_app_repository():
     }
     app.state.jobs = None
     yield
+    app.dependency_overrides.pop(require_clerk_session, None)
     _FORECAST_CACHE.clear()
 
 
@@ -145,6 +152,48 @@ def test_geo_outbreak_metapop_serves_run_snapshot_cache_when_current(monkeypatch
     assert data["metadata"]["metapop_n_runs"] == 8
 
 
+def test_reference_countries_returns_sorted_codes():
+    r = client.get("/api/v1/reference/countries")
+    assert r.status_code == 200
+    data = r.json()
+    assert "countries" in data
+    codes = [c["code"] for c in data["countries"]]
+    assert codes == sorted(codes)
+    assert all(len(c) == 2 for c in codes)
+    assert "ES" in codes
+
+
+def test_reference_airports_filtered_by_country():
+    r = client.get("/api/v1/reference/airports?country=ES")
+    assert r.status_code == 200
+    for a in r.json()["airports"]:
+        assert a["country"] == "ES"
+
+
+def test_validation_accepts_countries_from_reference_geo():
+    """Countries in airport_coords (e.g. DE) pass geographic_plausibility."""
+
+    from datetime import date
+    from uuid import uuid4
+
+    from eosp.core.models import CaseCreate, CaseStatus, LabResult, ObservationKind
+    from eosp.core.repository import InMemoryRepository
+
+    repo = InMemoryRepository(cases=[], validations={}, inferences=[], alerts=[])
+    payload = CaseCreate(
+        case_id=uuid4(),
+        patient_identifier="geo_test",
+        symptom_onset_date=date(2026, 5, 1),
+        location_country="DE",
+        confirmed_or_suspected=CaseStatus.CONFIRMED,
+        lab_test_result=LabResult.NOT_TESTED,
+        data_source="Manual_Form",
+        observation_kind=ObservationKind.INDIVIDUAL,
+    )
+    _, val = repo.create_case(payload)
+    assert val.checks_passed["geographic_plausibility"] is True
+
+
 def test_health_check():
     response = client.get("/api/v1/health")
     assert response.status_code == 200
@@ -218,6 +267,53 @@ def test_validation_endpoint_for_case():
     payload = response.json()
     assert payload["quality_score"] >= 0.65
     assert "temporal_consistency" in payload["checks_passed"]
+
+
+def test_get_case_returns_seed_row():
+    cases = client.get("/api/v1/cases").json()
+    cid = cases[0]["case_id"]
+    r = client.get(f"/api/v1/cases/{cid}")
+    assert r.status_code == 200
+    assert r.json()["case_id"] == cid
+
+
+def test_patch_case_updates_field():
+    cases = client.get("/api/v1/cases").json()
+    cid = cases[0]["case_id"]
+    r = client.patch(
+        f"/api/v1/cases/{cid}",
+        json={"patient_identifier": "patched_label", "updated_reason": "pytest_patch"},
+    )
+    assert r.status_code == 200
+    assert r.json()["case"]["patient_identifier"] == "patched_label"
+    again = client.get(f"/api/v1/cases/{cid}")
+    assert again.json()["patient_identifier"] == "patched_label"
+
+
+def test_delete_case_removes_from_list():
+    from datetime import date
+    from uuid import uuid4
+
+    from eosp.core.models import CaseCreate, CaseStatus, LabResult, ObservationKind
+
+    create = client.post(
+        "/api/v1/cases",
+        json={
+            "case_id": str(uuid4()),
+            "patient_identifier": "to_delete",
+            "symptom_onset_date": "2026-05-02",
+            "location_country": "ES",
+            "confirmed_or_suspected": "suspected",
+            "lab_test_result": "not_tested",
+            "data_source": "Manual_Form",
+            "observation_kind": "individual",
+        },
+    )
+    assert create.status_code == 201
+    cid = create.json()["case"]["case_id"]
+    del_r = client.delete(f"/api/v1/cases/{cid}")
+    assert del_r.status_code == 204
+    assert client.get(f"/api/v1/cases/{cid}").status_code == 404
 
 
 def test_create_case_persists_and_returns_validation():

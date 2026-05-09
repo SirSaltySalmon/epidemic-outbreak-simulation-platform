@@ -2,7 +2,7 @@ import asyncio
 import json
 from uuid import UUID
 
-from fastapi import APIRouter, Body, HTTPException, Query, Request, Response, status
+from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request, Response, status
 from pydantic import BaseModel, Field, field_validator, model_validator
 from fastapi.responses import StreamingResponse
 
@@ -10,8 +10,10 @@ from eosp.core.settings import get_settings
 from eosp.core.models import (
     CaseCreate,
     CaseIngestionResponse,
+    CaseRecord,
     CaseStatus,
     CaseSummary,
+    CaseUpdate,
     ForecastRunRequest,
     ForecastRunResponse,
     TriggerType,
@@ -24,17 +26,28 @@ from eosp.services.forecast import (
 )
 from eosp.services.scenarios import SCENARIO_CONFIG
 from eosp.services.geo import build_outbreak_geo
+from eosp.services.reference_geo import airports_for_api, countries_for_api
+
+from eosp.api.deps import require_clerk_session
 
 _SSE_POLL_INTERVAL_SECONDS = 0.5
 
 router = APIRouter()
 
 
+@router.get("/public-config")
+def public_config() -> dict[str, str | None]:
+    """Expose non-secret Clerk publishable key so the static UI can load Clerk."""
+
+    s = get_settings()
+    return {"clerk_publishable_key": s.clerk_publishable_key}
+
+
 def _no_simulation_results_detail(scenario: str | None = None) -> str:
     target = f" for scenario '{scenario}'" if scenario else ""
     return (
         f"No simulation results available{target}. "
-        "Open Run Analysis and complete a simulation before loading forecast outputs."
+        "Open Console (signed in) and complete a simulation before loading forecast outputs."
     )
 
 
@@ -59,6 +72,16 @@ class InferenceRunBody(BaseModel):
             if unknown:
                 raise ValueError(f"Unknown scenario(s): {', '.join(unknown)}")
         return self
+
+
+@router.get("/reference/countries")
+def reference_countries() -> dict[str, list[dict[str, str]]]:
+    return {"countries": countries_for_api()}
+
+
+@router.get("/reference/airports")
+def reference_airports(country: str | None = Query(default=None)) -> dict[str, list[dict[str, str]]]:
+    return {"airports": airports_for_api(country)}
 
 
 @router.get("/health")
@@ -177,8 +200,20 @@ def list_cases(
     return request.app.state.repository.list_cases(country=country, status=status)
 
 
+@router.get("/cases/{case_id}", response_model=CaseRecord)
+def get_case_detail(case_id: UUID, request: Request) -> CaseRecord:
+    record = request.app.state.repository.get_case(case_id)
+    if record is None:
+        raise HTTPException(status_code=404, detail="Case not found")
+    return record
+
+
 @router.post("/cases", response_model=CaseIngestionResponse, status_code=status.HTTP_201_CREATED)
-def create_case(payload: CaseCreate, request: Request) -> CaseIngestionResponse:
+def create_case(
+    payload: CaseCreate,
+    request: Request,
+    _session: dict | None = Depends(require_clerk_session),
+) -> CaseIngestionResponse:
     try:
         case, validation = request.app.state.repository.create_case(payload)
     except ValueError as exc:
@@ -195,6 +230,49 @@ def create_case(payload: CaseCreate, request: Request) -> CaseIngestionResponse:
         validation=validation,
         accepted_for_inference=accepted,
     )
+
+
+@router.patch("/cases/{case_id}", response_model=CaseIngestionResponse)
+def patch_case(
+    case_id: UUID,
+    payload: CaseUpdate,
+    request: Request,
+    _session: dict | None = Depends(require_clerk_session),
+) -> CaseIngestionResponse:
+    repo = request.app.state.repository
+    try:
+        case, validation = repo.update_case(case_id, payload)
+    except LookupError:
+        raise HTTPException(status_code=404, detail="Case not found") from None
+    except ValueError as exc:
+        detail = str(exc)
+        if "no fields to update" in detail.lower():
+            raise HTTPException(status_code=400, detail=detail) from exc
+        raise HTTPException(status_code=409, detail=detail) from exc
+
+    accepted = validation.quality_score >= 0.80
+    if accepted:
+        jobs = getattr(request.app.state, "jobs", None)
+        if jobs is not None:
+            jobs.schedule_refit(reason=f"case_updated:{case_id}", trigger=TriggerType.NEW_CASE)
+
+    return CaseIngestionResponse(
+        case=case,
+        validation=validation,
+        accepted_for_inference=accepted,
+    )
+
+
+@router.delete("/cases/{case_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_case_endpoint(
+    case_id: UUID,
+    request: Request,
+    _session: dict | None = Depends(require_clerk_session),
+) -> Response:
+    ok = request.app.state.repository.delete_case(case_id)
+    if not ok:
+        raise HTTPException(status_code=404, detail="Case not found")
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 @router.get("/cases/{case_id}/validation")
@@ -282,6 +360,7 @@ def forecast_runs(request: Request, limit: int = Query(default=10, ge=1, le=50))
 def trigger_inference(
     request: Request,
     body: InferenceRunBody = Body(default_factory=InferenceRunBody),
+    _session: dict | None = Depends(require_clerk_session),
 ):
     jobs = getattr(request.app.state, "jobs", None)
     if jobs is None:
@@ -316,7 +395,10 @@ def trigger_inference(
 
 
 @router.get("/inference/jobs/active")
-def inference_job_active(request: Request):
+def inference_job_active(
+    request: Request,
+    _session: dict | None = Depends(require_clerk_session),
+):
     jobs = getattr(request.app.state, "jobs", None)
     if jobs is None:
         return {"job": None}
@@ -325,7 +407,11 @@ def inference_job_active(request: Request):
 
 
 @router.get("/inference/jobs")
-def list_inference_jobs(request: Request, limit: int = Query(default=20, ge=1, le=100)):
+def list_inference_jobs(
+    request: Request,
+    limit: int = Query(default=20, ge=1, le=100),
+    _session: dict | None = Depends(require_clerk_session),
+):
     jobs = getattr(request.app.state, "jobs", None)
     if jobs is None:
         return {"jobs": []}
@@ -333,7 +419,11 @@ def list_inference_jobs(request: Request, limit: int = Query(default=20, ge=1, l
 
 
 @router.get("/inference/jobs/{job_id}")
-def inference_job_status(job_id: str, request: Request):
+def inference_job_status(
+    job_id: str,
+    request: Request,
+    _session: dict | None = Depends(require_clerk_session),
+):
     jobs = getattr(request.app.state, "jobs", None)
     if jobs is None:
         raise HTTPException(status_code=503, detail="Background job manager unavailable")
@@ -344,7 +434,11 @@ def inference_job_status(job_id: str, request: Request):
 
 
 @router.get("/inference/jobs/{job_id}/events")
-async def job_events_stream(job_id: str, request: Request):
+async def job_events_stream(
+    job_id: str,
+    request: Request,
+    _session: dict | None = Depends(require_clerk_session),
+):
     jobs = getattr(request.app.state, "jobs", None)
     if jobs is None:
         raise HTTPException(status_code=503, detail="Job manager unavailable")

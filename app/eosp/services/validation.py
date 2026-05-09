@@ -1,15 +1,18 @@
 from collections import Counter
 
 from eosp.core.models import CaseRecord, ObservationKind, ValidationResult
+from eosp.services.reference_geo import all_valid_country_codes
 
 
 OFFICIAL_SOURCES = {"WHO_DON", "Contact_Trace_DB"}
-VALID_COUNTRIES = {"ZA", "CH", "NL", "ES", "GB", "CV"}
+
+# Snapshot at import for WHO DON extraction helpers (`who_don_extract` iterates this set).
+VALID_COUNTRIES = frozenset(all_valid_country_codes())
 
 
 def validate_case(case: CaseRecord, all_cases: list[CaseRecord]) -> ValidationResult:
     temporal = _temporal_consistency(case)
-    geography = case.location_country in VALID_COUNTRIES
+    geography = case.location_country.upper() in VALID_COUNTRIES
     official = case.data_source in OFFICIAL_SOURCES
     duplicate_probability = _duplicate_probability(case, all_cases)
 

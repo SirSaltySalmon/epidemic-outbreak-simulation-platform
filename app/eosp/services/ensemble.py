@@ -10,6 +10,7 @@ matrix-vector products release the GIL.
 
 from __future__ import annotations
 
+import hashlib
 import os
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
@@ -26,6 +27,8 @@ from eosp.services.geo_buckets import (
     GEO_BUCKET_METRIC_ID,
     GEO_BUCKET_METRIC_INFECTIOUS_I_DETAIL,
     GEO_BUCKET_METRIC_INFECTIOUS_I_ID,
+    GEO_BUCKET_METRIC_PEAK_INFECTIOUS_I_DETAIL,
+    GEO_BUCKET_METRIC_PEAK_INFECTIOUS_I_ID,
 )
 from eosp.services.network import ContactNetwork
 from eosp.services.scenarios import ScenarioSpec
@@ -87,9 +90,12 @@ def run_ensemble(
         start_date=config.start_date,
         n_days=config.n_days,
     )
+    hash_input = f"{config.n_simulations}|{config.rng_seed}|{scenario.name}"
+    ensemble_spec_hash = hashlib.sha256(hash_input.encode()).hexdigest()[:16]
     metadata: dict[str, Any] = {
             "model_version": inference.version,
             "n_simulations": config.n_simulations,
+            "ensemble_spec_hash": ensemble_spec_hash,
             "parameter_values": {
                 "p_transmit_mean": float(np.mean(samples["p_transmit"])),
                 "p_transmit_std": float(np.std(samples["p_transmit"])),
@@ -354,16 +360,26 @@ def _aggregate_geo_forecast(
     except ValueError:
         return None
     # (n_sim, n_days+1, n_buckets)
+    n_sim = int(stacked_inf.shape[0])
+    tot_i_per_day = stacked_inf.sum(axis=2)
+    peak_day_per_sim = tot_i_per_day.argmax(axis=1)
+    peak_inf_per_sim = stacked_inf[np.arange(n_sim, dtype=np.intp), peak_day_per_sim, :]
+    peak_blocks: dict[str, dict[str, float]] = {}
+    for bi, label in enumerate(labels):
+        peak_blocks[label] = _percentile_block(peak_inf_per_sim[:, bi].astype(float), include_50=True)
     by_day: list[dict[str, Any]] = []
     for day in range(1, n_days + 1):
         buckets: dict[str, Any] = {}
         for bi, label in enumerate(labels):
             day_vals_cum = stacked_cum[:, day, bi].astype(float)
             day_vals_inf = stacked_inf[:, day, bi].astype(float)
-            buckets[label] = {
+            entry: dict[str, Any] = {
                 "cumulative_infected": _percentile_block(day_vals_cum, include_50=True),
                 "infectious_I": _percentile_block(day_vals_inf, include_50=True),
             }
+            if day == n_days:
+                entry["peak_infectious_I"] = peak_blocks[label]
+            buckets[label] = entry
         by_day.append(
             {
                 "day": day,
@@ -376,6 +392,7 @@ def _aggregate_geo_forecast(
         "metrics": [
             {"id": GEO_BUCKET_METRIC_ID, "detail": GEO_BUCKET_METRIC_DETAIL},
             {"id": GEO_BUCKET_METRIC_INFECTIOUS_I_ID, "detail": GEO_BUCKET_METRIC_INFECTIOUS_I_DETAIL},
+            {"id": GEO_BUCKET_METRIC_PEAK_INFECTIOUS_I_ID, "detail": GEO_BUCKET_METRIC_PEAK_INFECTIOUS_I_DETAIL},
         ],
         "metric": GEO_BUCKET_METRIC_ID,
         "metric_detail": GEO_BUCKET_METRIC_DETAIL,

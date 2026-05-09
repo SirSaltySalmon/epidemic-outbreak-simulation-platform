@@ -1,7 +1,7 @@
 from eosp.services.geo import _risk_heatmap_rows_from_abm_geo_forecast
 
 
-def test_heatmap_rows_from_abm_geo_uses_infectious_median():
+def test_heatmap_rows_from_abm_geo_uses_cumulative_median():
     coords = {
         "JNB": {"lat": -26.1, "lng": 28.2, "city": "Johannesburg", "country": "ZA"},
     }
@@ -21,7 +21,7 @@ def test_heatmap_rows_from_abm_geo_uses_infectious_median():
     rows = _risk_heatmap_rows_from_abm_geo_forecast(gf, coords)
     assert len(rows) == 1
     assert rows[0]["airport_iata"] == "JNB"
-    assert rows[0]["risk_score"] == 5.0
+    assert rows[0]["risk_score"] == 10.0
     assert rows[0]["lat"] == -26.1
 
 

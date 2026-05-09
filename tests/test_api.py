@@ -271,6 +271,14 @@ def test_geo_outbreak_abm_geo_uses_forecast_when_cached():
     assert payload["risk_heatmap"]
 
 
+def test_geo_bundle_endpoint_returns_schema_version():
+    r = client.get("/api/v1/geo/bundle?risk_model=abm_geo")
+    assert r.status_code == 200
+    data = r.json()
+    assert data.get("schema_version") == "1"
+    assert "simulation" in data and "layers" in data["simulation"]
+
+
 def test_geo_outbreak_metapop_includes_sidecar_metadata(tmp_path):
     from eosp.core.seed_data import CASES
     from eosp.services.geo import build_outbreak_geo

@@ -17,5 +17,7 @@ __pycache__/
 dist/
 build/
 .env
+# Local git worktrees (superpowers:using-git-worktrees)
+.worktrees/
 # Local git worktrees (see superpowers:using-git-worktrees)
 .worktrees/

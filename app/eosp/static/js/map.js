@@ -18,12 +18,72 @@ const ABM_GEO_RISK_SOURCE = "abm_geo_forecast";
 /** Max click-to-popup markers for metapop (full graph has 1000+ airports). */
 const METAPOP_POPUP_MARKER_CAP = 120;
 
+function _riskSource(data) {
+  if (data && data.schema_version && data.provenance) {
+    return data.provenance.risk_source;
+  }
+  return data?.metadata?.risk_source;
+}
+
 function _isMetapopKernel(data) {
-  return (data.metadata && data.metadata.risk_source) === METAPOP_RISK_SOURCE;
+  return _riskSource(data) === METAPOP_RISK_SOURCE;
 }
 
 function _isAbmGeoKernel(data) {
-  return data.metadata?.risk_source === ABM_GEO_RISK_SOURCE;
+  return _riskSource(data) === ABM_GEO_RISK_SOURCE;
+}
+
+/** Square-root normalize count-style heat values for leaflet.heat (matches metapop scaling). */
+function _normalizeForHeat(features) {
+  const vals = features.map((f) => Number(f.value ?? f.risk_score) || 0);
+  const maxVal = Math.max(...vals, 1);
+  return features.map((f, i) => {
+    const lat = f.lat ?? f[0];
+    const lng = f.lng ?? f[1];
+    const raw = vals[i];
+    return [lat, lng, Math.sqrt(raw / maxVal)];
+  });
+}
+
+function _legacyShapeFromBundle(bundle) {
+  const sim = bundle.simulation;
+  const primary = sim.layers.find((l) => l.id === sim.primary_layer_id);
+  const feats = primary ? primary.features : [];
+  const risk_heatmap = feats.map((f) => ({
+    airport_iata: f.airport_iata,
+    lat: f.lat,
+    lng: f.lng,
+    city: f.city,
+    country: f.country,
+    risk_score: f.value,
+    ring: f.ring ?? 0,
+  }));
+  return {
+    ship: bundle.ship,
+    confirmed_cases: bundle.observed.case_markers,
+    evacuation_flights: bundle.evacuation_flights,
+    risk_heatmap,
+    metadata: {
+      ...bundle.provenance,
+      n_simulations: sim.n_simulations,
+      ensemble_spec_hash: sim.ensemble_spec_hash,
+      inference_version: sim.inference_version,
+      scenario: sim.scenario,
+      primary_layer_id: sim.primary_layer_id,
+      p_transmit_used: sim.p_transmit_used,
+      ring1_airports: sim.ring1_airports,
+      ring2_airports_found: sim.ring2_airports_found,
+      ring3_airports_found: sim.ring3_airports_found,
+      abm_geo_fallback_reason: sim.abm_geo_fallback_reason,
+      metapop_n_runs: sim.metapop_n_runs,
+      metapop_mobility_path: sim.metapop_mobility_path,
+      mobility_bundle_version: sim.mobility_bundle_version,
+      mobility_source: sim.mobility_source,
+      mobility_license_note: sim.mobility_license_note,
+      mobility_horizon_days: sim.mobility_horizon_days,
+      risk_metric_id: sim.risk_metric_id,
+    },
+  };
 }
 
 export function initMap(containerId) {
@@ -44,6 +104,10 @@ export function initMap(containerId) {
 
 export function renderGeoData(data, geoForecast) {
   if (!_map) return;
+
+  if (data && data.schema_version) {
+    data = _legacyShapeFromBundle(data);
+  }
 
   // Clear previous layers
   _caseMarkers.forEach((m) => m.remove());
@@ -109,13 +173,12 @@ export function renderGeoData(data, geoForecast) {
   const isMetapop = _isMetapopKernel(data);
   const isAbmGeo = _isAbmGeoKernel(data);
   const isCountKernel = isMetapop || isAbmGeo;
-  const scores = data.risk_heatmap.map((z) => Number(z.risk_score) || 0);
-  const maxScore = Math.max(...scores, 1e-12);
-  const heatPoints = data.risk_heatmap.map((z) => {
-    const raw = Number(z.risk_score) || 0;
-    const w = isCountKernel ? Math.sqrt(raw / maxScore) : raw;
-    return [z.lat, z.lng, w];
-  });
+  const heatPoints = isCountKernel
+    ? _normalizeForHeat(data.risk_heatmap)
+    : data.risk_heatmap.map((z) => {
+        const raw = Number(z.risk_score) || 0;
+        return [z.lat, z.lng, raw];
+      });
   _heatLayer = L.heatLayer(heatPoints, {
     radius: isCountKernel ? 22 : 30,
     blur: isCountKernel ? 16 : 20,
@@ -137,7 +200,7 @@ export function renderGeoData(data, geoForecast) {
       const layerCopy = isMetapop
         ? `Metapop layer: median <strong>infectious (I)</strong> on last sim day ≈ <strong>${raw.toFixed(2)}</strong> (ensemble).<br>` +
           `<em>Scheduled-connectivity proxy — not reported case counts.</em>`
-        : `ABM geo heat: median <strong>infectious (I)</strong> on final forecast day ≈ <strong>${raw.toFixed(2)}</strong>.<br>` +
+        : `ABM geo heat: median <strong>cumulative infections</strong> on final forecast day ≈ <strong>${raw.toFixed(2)}</strong>.<br>` +
           `<em>Forecast bucket median — not OpenSky ring scores.</em>`;
       const m = L.circleMarker([z.lat, z.lng], {
         radius: 8,
@@ -229,7 +292,7 @@ function _updateMapLegend(data, geoForecast) {
     ? ` Popups on the top ${METAPOP_POPUP_MARKER_CAP} airports by median I (zoom heat for the rest).`
     : "";
   const abmGeoHint = _isAbmGeoKernel(data)
-    ? " Orange heat is ABM infectious median on the final forecast day."
+    ? " Orange heat is ABM cumulative-infection median on the final forecast day."
     : "";
   const abmNote = geoForecast
     ? "Green circles: ABM median cumulative infected (E+I+R+D) at destination clusters, day 14 — width scales to the busiest cluster in this run."

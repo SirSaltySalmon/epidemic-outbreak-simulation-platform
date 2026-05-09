@@ -26,7 +26,7 @@ from eosp.services.forecast import (
     run_forecast_engine,
 )
 from eosp.services.scenarios import SCENARIO_CONFIG
-from eosp.services.geo import build_outbreak_geo
+from eosp.services.geo import build_geo_bundle, build_outbreak_geo
 from eosp.services.reference_geo import airports_for_api, countries_for_api
 
 from eosp.api.deps import require_console_access
@@ -131,10 +131,22 @@ def _build_geo_outbreak_for_cases(
                 baseline_fc = None
 
     legacy_snap = None
+    fc_meta_n_sim: int | None = None
+    fc_meta_hash: str | None = None
     if baseline_fc is not None:
         lg = baseline_fc.metadata.get("legacy_opensky_geo")
         if isinstance(lg, dict):
             legacy_snap = lg
+        raw_n = baseline_fc.metadata.get("n_simulations")
+        if isinstance(raw_n, int):
+            fc_meta_n_sim = raw_n
+        elif raw_n is not None:
+            try:
+                fc_meta_n_sim = int(raw_n)
+            except (TypeError, ValueError):
+                fc_meta_n_sim = None
+        h = baseline_fc.metadata.get("ensemble_spec_hash")
+        fc_meta_hash = str(h) if h else None
 
     return build_outbreak_geo(
         p_transmit=p_transmit,
@@ -143,6 +155,83 @@ def _build_geo_outbreak_for_cases(
         metapop_n_runs=metapop_runs,
         abm_geo_forecast=abm_geo_forecast,
         legacy_opensky_geo=legacy_snap,
+        inference_version=inference_version,
+        forecast_n_simulations=fc_meta_n_sim,
+        ensemble_spec_hash=fc_meta_hash,
+    )
+
+
+def _build_geo_bundle_for_cases(
+    repo: Any,
+    cases: list[CaseRecord],
+    risk_model: str | None,
+    metapop_runs: int | None,
+) -> dict[str, Any]:
+    """Shared kernel for ``GET /geo/bundle`` — same inputs as geo/outbreak."""
+
+    settings = get_settings()
+    effective_risk = risk_model if risk_model is not None else settings.geo_risk_model
+    effective_risk = (effective_risk or "").lower()
+    if effective_risk not in ("legacy", "metapop", "abm_geo"):
+        effective_risk = "legacy"
+    if effective_risk == "metapop" and not settings.metapop_enabled:
+        effective_risk = "legacy"
+    p_transmit = 1.5 / 21.5
+    inference_version: str | None = None
+    try:
+        inference = repo.latest_inference()
+        if inference is not None and "p_transmit" in inference.parameters:
+            p_transmit = float(inference.parameters["p_transmit"].mean)
+        if inference is not None:
+            inference_version = inference.version
+    except LookupError:
+        pass
+    abm_geo_forecast = None
+    baseline_fc = None
+    if effective_risk == "abm_geo":
+        try:
+            inf = repo.latest_inference()
+            baseline_fc = get_cached_forecast("baseline", repository=repo, inference=inf)
+            abm_geo_forecast = baseline_fc.metadata.get("geo_forecast") if baseline_fc else None
+        except (LookupError, ForecastNotCachedError):
+            baseline_fc = None
+            abm_geo_forecast = None
+    else:
+        if effective_risk == "legacy":
+            try:
+                if inference is not None:
+                    baseline_fc = get_cached_forecast("baseline", repository=repo, inference=inference)
+            except ForecastNotCachedError:
+                baseline_fc = None
+
+    legacy_snap = None
+    fc_meta_n_sim: int | None = None
+    fc_meta_hash: str | None = None
+    if baseline_fc is not None:
+        lg = baseline_fc.metadata.get("legacy_opensky_geo")
+        if isinstance(lg, dict):
+            legacy_snap = lg
+        raw_n = baseline_fc.metadata.get("n_simulations")
+        if isinstance(raw_n, int):
+            fc_meta_n_sim = raw_n
+        elif raw_n is not None:
+            try:
+                fc_meta_n_sim = int(raw_n)
+            except (TypeError, ValueError):
+                fc_meta_n_sim = None
+        h = baseline_fc.metadata.get("ensemble_spec_hash")
+        fc_meta_hash = str(h) if h else None
+
+    return build_geo_bundle(
+        p_transmit=p_transmit,
+        cases=cases,
+        risk_model=effective_risk,
+        metapop_n_runs=metapop_runs,
+        abm_geo_forecast=abm_geo_forecast,
+        legacy_opensky_geo=legacy_snap,
+        inference_version=inference_version,
+        forecast_n_simulations=fc_meta_n_sim,
+        ensemble_spec_hash=fc_meta_hash,
     )
 
 
@@ -286,6 +375,21 @@ def geo_outbreak(
     repo = request.app.state.repository
     cases = repo.list_cases()
     return _build_geo_outbreak_for_cases(repo, cases, risk_model, metapop_runs)
+
+
+@router.get("/geo/bundle")
+def geo_bundle(
+    request: Request,
+    http_response: Response,
+    risk_model: str | None = Query(default=None),
+    metapop_runs: int | None = Query(default=None, ge=1, le=5000),
+) -> dict[str, Any]:
+    """Unified geo payload (schema_version + layers). Same auth and cache policy as ``/geo/outbreak``."""
+
+    http_response.headers["Cache-Control"] = _CACHE_DASHBOARD_AGGREGATE
+    repo = request.app.state.repository
+    cases = repo.list_cases()
+    return _build_geo_bundle_for_cases(repo, cases, risk_model, metapop_runs)
 
 
 @router.get("/cases/summary", response_model=CaseSummary)

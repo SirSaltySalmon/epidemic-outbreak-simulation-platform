@@ -31,6 +31,11 @@ GEO_BUCKET_METRIC_INFECTIOUS_I_DETAIL = (
     "Agents in the bucket in state I (infectious) only."
 )
 
+GEO_BUCKET_METRIC_PEAK_INFECTIOUS_I_ID = "peak_infectious_I"
+GEO_BUCKET_METRIC_PEAK_INFECTIOUS_I_DETAIL = (
+    "Peak concurrent infectious (I) count in the bucket on the simulation day with maximum total I."
+)
+
 
 def geo_bucket_spec(network: ContactNetwork) -> tuple[tuple[str, ...], np.ndarray]:
     """Return ``(labels, agent_bucket)`` with ``agent_bucket[i]`` in ``0..len(labels)-1``."""

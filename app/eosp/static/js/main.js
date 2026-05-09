@@ -11,20 +11,21 @@ import { initDrawer, notifyDrawerOpened } from "./drawer.js";
 import { applyCasesList } from "./cases.js";
 
 async function boot() {
-  await initAuth();
-  // Wait for CDN libraries (Leaflet and Plotly use defer, so they may not
-  // be ready immediately when the module executes on fast connections)
-  await _waitForLibs();
-
-  // Parallel data fetch
-  const [summary, forecast, versions, scenarios, geo, caseLines] = await Promise.allSettled([
-    get("/cases/summary"),
-    get("/forecasts/baseline"),
-    get("/inference/versions?limit=2"),
-    get("/scenarios/compare?" + SCENARIOS_COMPARE_QUERY),
-    get("/geo/outbreak"),
-    get("/cases"),
+  const authPromise = initAuth();
+  // Clerk, CDN libraries (Leaflet/Plotly), and dashboard APIs run together;
+  // await Clerk again before initDrawer so console routes see Bearer tokens.
+  const [, settled] = await Promise.all([
+    _waitForLibs(),
+    Promise.allSettled([
+      get("/cases/summary"),
+      get("/forecasts/baseline"),
+      get("/inference/versions?limit=2"),
+      get("/scenarios/compare?" + SCENARIOS_COMPARE_QUERY),
+      get("/geo/outbreak"),
+      get("/cases"),
+    ]),
   ]);
+  const [summary, forecast, versions, scenarios, geo, caseLines] = settled;
 
   if (summary.status === "fulfilled") {
     _applySummaryKpis(summary.value);
@@ -90,7 +91,8 @@ async function boot() {
     renderGeoData(geo.value, gf);
   }
 
-  // Researcher drawer wiring
+  // Researcher drawer wiring (after Clerk — jobs/active needs a token in prod)
+  await authPromise;
   await initDrawer(_onRunComplete);
   _wireDrawerToggle();
 }

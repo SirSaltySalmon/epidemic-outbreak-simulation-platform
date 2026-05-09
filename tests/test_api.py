@@ -4,7 +4,8 @@ from shutil import copyfile
 from fastapi.testclient import TestClient
 import pytest
 
-from eosp.api.deps import require_clerk_session
+from eosp.api.deps import claims_console_access, require_clerk_session
+from eosp.core.clerk_console import fetch_clerk_public_metadata
 from eosp.core.repository import InMemoryRepository
 from eosp.core.seed_data import ALERTS, CASES, INFERENCES, VALIDATIONS
 from eosp.core.settings import get_settings
@@ -48,6 +49,8 @@ def reset_app_repository(monkeypatch):
     """Tests bypass Clerk JWT; host `.env` may still set ``EOSP_CLERK_*``."""
     monkeypatch.setenv("EOSP_CLERK_FRONTEND_API", "")
     monkeypatch.delenv("EOSP_CLERK_FRONTEND_API", raising=False)
+    # Host `.env` may set a secret; `delenv` does not override file-backed values — force empty.
+    monkeypatch.setenv("EOSP_CLERK_SECRET_KEY", "")
     get_settings.cache_clear()
     app.dependency_overrides[require_clerk_session] = lambda: None
     _FORECAST_CACHE.clear()
@@ -67,6 +70,145 @@ def reset_app_repository(monkeypatch):
     yield
     app.dependency_overrides.pop(require_clerk_session, None)
     _FORECAST_CACHE.clear()
+
+
+def test_claims_console_access_detects_metadata_and_claim():
+    assert claims_console_access({"public_metadata": {"console_access": True}})
+    assert not claims_console_access({"public_metadata": {"console_access": False}})
+    assert claims_console_access({"console_access": True})
+    assert not claims_console_access({"public_metadata": {}})
+    assert not claims_console_access({"sub": "x"})
+
+
+def test_fetch_clerk_public_metadata_sends_user_agent(monkeypatch):
+    captured = {}
+
+    class FakeResponse:
+        status = 200
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def read(self):
+            return b'{"public_metadata":{"console_access":true}}'
+
+    def fake_urlopen(req, timeout):
+        captured["user_agent"] = req.headers.get("User-agent")
+        return FakeResponse()
+
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+
+    pm = fetch_clerk_public_metadata("user_real", "sk_test_x")
+
+    assert pm == {"console_access": True}
+    assert captured["user_agent"]
+    assert "Python-urllib" not in captured["user_agent"]
+
+
+def test_public_config_sets_public_cache_header():
+    r = client.get("/api/v1/public-config")
+    assert r.status_code == 200
+    cc = r.headers.get("cache-control", "")
+    assert "public" in cc
+    assert "max-age=" in cc
+
+
+def test_reference_countries_allows_public_cache():
+    r = client.get("/api/v1/reference/countries")
+    assert r.status_code == 200
+    cc = r.headers.get("cache-control", "")
+    assert "public" in cc
+    assert "max-age=" in cc
+
+
+def test_cases_summary_allows_public_cache():
+    r = client.get("/api/v1/cases/summary")
+    assert r.status_code == 200
+    cc = r.headers.get("cache-control", "")
+    assert "public" in cc
+    assert "max-age=" in cc
+
+
+def test_console_access_denied_for_patch_when_claims_lack_flag():
+    app.dependency_overrides[require_clerk_session] = lambda: {"sub": "user_test", "public_metadata": {}}
+    try:
+        cases = client.get("/api/v1/cases").json()
+        cid = cases[0]["case_id"]
+        r = client.patch(
+            f"/api/v1/cases/{cid}",
+            json={"patient_identifier": "nope", "updated_reason": "t"},
+        )
+        assert r.status_code == 403
+        assert r.json()["detail"] == "Console access required"
+    finally:
+        app.dependency_overrides[require_clerk_session] = lambda: None
+
+
+def test_console_access_denied_for_forecast_run():
+    app.dependency_overrides[require_clerk_session] = lambda: {"sub": "u", "public_metadata": {}}
+    try:
+        r = client.post(
+            "/api/v1/forecasts/run",
+            json={
+                "scenarios": ["baseline"],
+                "model_version": "latest",
+                "n_simulations": 100,
+            },
+        )
+        assert r.status_code == 403
+        assert r.json()["detail"] == "Console access required"
+    finally:
+        app.dependency_overrides[require_clerk_session] = lambda: None
+
+
+def test_console_access_allows_patch_when_metadata_true():
+    app.dependency_overrides[require_clerk_session] = lambda: {
+        "sub": "u",
+        "public_metadata": {"console_access": True},
+    }
+    try:
+        cases = client.get("/api/v1/cases").json()
+        cid = cases[0]["case_id"]
+        r = client.patch(
+            f"/api/v1/cases/{cid}",
+            json={"patient_identifier": "console_ok", "updated_reason": "t"},
+        )
+        assert r.status_code == 200
+        assert r.json()["case"]["patient_identifier"] == "console_ok"
+    finally:
+        app.dependency_overrides[require_clerk_session] = lambda: None
+
+
+def test_console_access_allows_patch_via_clerk_api_when_jwt_omits_metadata(monkeypatch):
+    """Default Clerk JWTs omit public_metadata; secret key + Backend API supplies it."""
+
+    def fake_fetch(uid: str, secret: str, api_version: str = "2025-04-10"):
+        assert uid == "user_real"
+        assert secret == "sk_test_x"
+        assert api_version == "2025-04-10"
+        return {"console_access": True}
+
+    # Patch name as bound in ``eosp.api.deps`` (import copies the reference).
+    monkeypatch.setattr("eosp.api.deps.fetch_clerk_public_metadata", fake_fetch)
+    monkeypatch.setenv("EOSP_CLERK_SECRET_KEY", "sk_test_x")
+    get_settings.cache_clear()
+    app.dependency_overrides[require_clerk_session] = lambda: {"sub": "user_real"}
+    try:
+        cases = client.get("/api/v1/cases").json()
+        cid = cases[0]["case_id"]
+        r = client.patch(
+            f"/api/v1/cases/{cid}",
+            json={"patient_identifier": "via_api", "updated_reason": "t"},
+        )
+        assert r.status_code == 200
+        assert r.json()["case"]["patient_identifier"] == "via_api"
+    finally:
+        monkeypatch.delenv("EOSP_CLERK_SECRET_KEY", raising=False)
+        get_settings.cache_clear()
+        app.dependency_overrides[require_clerk_session] = lambda: None
 
 
 def test_geo_outbreak_metapop_risk_source(enable_metapop):

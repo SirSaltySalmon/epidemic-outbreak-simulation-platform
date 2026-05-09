@@ -39,7 +39,6 @@ function _detailMessage(detail) {
 
 export async function get(path) {
   const res = await fetch(BASE + path, {
-    cache: "no-store",
     headers: await authHeaders(),
     credentials: "include",
   });

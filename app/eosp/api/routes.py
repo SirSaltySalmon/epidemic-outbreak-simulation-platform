@@ -28,17 +28,23 @@ from eosp.services.scenarios import SCENARIO_CONFIG
 from eosp.services.geo import build_outbreak_geo
 from eosp.services.reference_geo import airports_for_api, countries_for_api
 
-from eosp.api.deps import require_clerk_session
+from eosp.api.deps import require_console_access
 
 _SSE_POLL_INTERVAL_SECONDS = 0.5
 
 router = APIRouter()
 
+# Anonymous dashboard GETs: short TTL + stale-while-revalidate for traffic spikes.
+_CACHE_DASHBOARD_AGGREGATE = "public, max-age=30, stale-while-revalidate=120"
+_CACHE_REFERENCE_BUNDLE = "public, max-age=3600, stale-while-revalidate=86400"
+_CACHE_PUBLIC_CONFIG = "public, max-age=300"
+
 
 @router.get("/public-config")
-def public_config() -> dict[str, str | None]:
+def public_config(response: Response) -> dict[str, str | None]:
     """Expose non-secret Clerk publishable key so the static UI can load Clerk."""
 
+    response.headers["Cache-Control"] = _CACHE_PUBLIC_CONFIG
     s = get_settings()
     return {"clerk_publishable_key": s.clerk_publishable_key}
 
@@ -75,12 +81,17 @@ class InferenceRunBody(BaseModel):
 
 
 @router.get("/reference/countries")
-def reference_countries() -> dict[str, list[dict[str, str]]]:
+def reference_countries(http_response: Response) -> dict[str, list[dict[str, str]]]:
+    http_response.headers["Cache-Control"] = _CACHE_REFERENCE_BUNDLE
     return {"countries": countries_for_api()}
 
 
 @router.get("/reference/airports")
-def reference_airports(country: str | None = Query(default=None)) -> dict[str, list[dict[str, str]]]:
+def reference_airports(
+    http_response: Response,
+    country: str | None = Query(default=None),
+) -> dict[str, list[dict[str, str]]]:
+    http_response.headers["Cache-Control"] = _CACHE_REFERENCE_BUNDLE
     return {"airports": airports_for_api(country)}
 
 
@@ -104,7 +115,7 @@ def geo_outbreak(
     risk_model: str | None = Query(default=None),
     metapop_runs: int | None = Query(default=None, ge=1, le=5000),
 ):
-    http_response.headers["Cache-Control"] = "no-store"
+    http_response.headers["Cache-Control"] = _CACHE_DASHBOARD_AGGREGATE
     settings = get_settings()
     effective_risk = risk_model if risk_model is not None else settings.geo_risk_model
     effective_risk = (effective_risk or "").lower()
@@ -153,7 +164,7 @@ def geo_outbreak(
 
 @router.get("/cases/summary", response_model=CaseSummary)
 def case_summary(request: Request, http_response: Response) -> CaseSummary:
-    http_response.headers["Cache-Control"] = "no-store"
+    http_response.headers["Cache-Control"] = _CACHE_DASHBOARD_AGGREGATE
     confirmed, suspected, deaths, last_updated, sources, feed_last = request.app.state.repository.case_summary()
     repo = request.app.state.repository
     fd_med, fd_lo, fd_hi = _baseline_forecast_deaths_final_day(repo)
@@ -194,9 +205,11 @@ def _baseline_forecast_deaths_final_day(repo) -> tuple[float | None, float | Non
 @router.get("/cases")
 def list_cases(
     request: Request,
+    http_response: Response,
     country: str | None = None,
     status: CaseStatus | None = None,
 ):
+    http_response.headers["Cache-Control"] = _CACHE_DASHBOARD_AGGREGATE
     return request.app.state.repository.list_cases(country=country, status=status)
 
 
@@ -212,7 +225,7 @@ def get_case_detail(case_id: UUID, request: Request) -> CaseRecord:
 def create_case(
     payload: CaseCreate,
     request: Request,
-    _session: dict | None = Depends(require_clerk_session),
+    _session: dict | None = Depends(require_console_access),
 ) -> CaseIngestionResponse:
     try:
         case, validation = request.app.state.repository.create_case(payload)
@@ -237,7 +250,7 @@ def patch_case(
     case_id: UUID,
     payload: CaseUpdate,
     request: Request,
-    _session: dict | None = Depends(require_clerk_session),
+    _session: dict | None = Depends(require_console_access),
 ) -> CaseIngestionResponse:
     repo = request.app.state.repository
     try:
@@ -267,7 +280,7 @@ def patch_case(
 def delete_case_endpoint(
     case_id: UUID,
     request: Request,
-    _session: dict | None = Depends(require_clerk_session),
+    _session: dict | None = Depends(require_console_access),
 ) -> Response:
     ok = request.app.state.repository.delete_case(case_id)
     if not ok:
@@ -320,12 +333,16 @@ def forecast(
                 for key in list(metric):
                     if key.startswith("ci_"):
                         del metric[key]
-    http_response.headers["Cache-Control"] = "no-store"
+    http_response.headers["Cache-Control"] = _CACHE_DASHBOARD_AGGREGATE
     return payload
 
 
 @router.post("/forecasts/run", response_model=ForecastRunResponse)
-def run_forecasts(payload: ForecastRunRequest, request: Request) -> ForecastRunResponse:
+def run_forecasts(
+    payload: ForecastRunRequest,
+    request: Request,
+    _session: dict | None = Depends(require_console_access),
+) -> ForecastRunResponse:
     unknown = [scenario for scenario in payload.scenarios if scenario not in SCENARIO_CONFIG]
     if unknown:
         raise HTTPException(status_code=404, detail=f"Unknown scenario(s): {', '.join(unknown)}")
@@ -360,7 +377,7 @@ def forecast_runs(request: Request, limit: int = Query(default=10, ge=1, le=50))
 def trigger_inference(
     request: Request,
     body: InferenceRunBody = Body(default_factory=InferenceRunBody),
-    _session: dict | None = Depends(require_clerk_session),
+    _session: dict | None = Depends(require_console_access),
 ):
     jobs = getattr(request.app.state, "jobs", None)
     if jobs is None:
@@ -397,7 +414,7 @@ def trigger_inference(
 @router.get("/inference/jobs/active")
 def inference_job_active(
     request: Request,
-    _session: dict | None = Depends(require_clerk_session),
+    _session: dict | None = Depends(require_console_access),
 ):
     jobs = getattr(request.app.state, "jobs", None)
     if jobs is None:
@@ -410,7 +427,7 @@ def inference_job_active(
 def list_inference_jobs(
     request: Request,
     limit: int = Query(default=20, ge=1, le=100),
-    _session: dict | None = Depends(require_clerk_session),
+    _session: dict | None = Depends(require_console_access),
 ):
     jobs = getattr(request.app.state, "jobs", None)
     if jobs is None:
@@ -422,7 +439,7 @@ def list_inference_jobs(
 def inference_job_status(
     job_id: str,
     request: Request,
-    _session: dict | None = Depends(require_clerk_session),
+    _session: dict | None = Depends(require_console_access),
 ):
     jobs = getattr(request.app.state, "jobs", None)
     if jobs is None:
@@ -437,7 +454,7 @@ def inference_job_status(
 async def job_events_stream(
     job_id: str,
     request: Request,
-    _session: dict | None = Depends(require_clerk_session),
+    _session: dict | None = Depends(require_console_access),
 ):
     jobs = getattr(request.app.state, "jobs", None)
     if jobs is None:
@@ -472,7 +489,7 @@ async def job_events_stream(
 
 @router.get("/inference/versions")
 def inference_versions(request: Request, http_response: Response, limit: int = Query(default=10, ge=1, le=50)):
-    http_response.headers["Cache-Control"] = "no-store"
+    http_response.headers["Cache-Control"] = _CACHE_DASHBOARD_AGGREGATE
     versions = []
     for inference in request.app.state.repository.inferences[:limit]:
         diag = inference.diagnostics
@@ -562,7 +579,7 @@ def scenario_comparison(
     http_response: Response,
     scenarios: str = "baseline,quarantine_immediate,evacuation_delay_7d",
 ):
-    http_response.headers["Cache-Control"] = "no-store"
+    http_response.headers["Cache-Control"] = _CACHE_DASHBOARD_AGGREGATE
     scenario_names = [name.strip() for name in scenarios.split(",") if name.strip()]
     unknown = [name for name in scenario_names if name not in SCENARIO_CONFIG]
     if unknown:

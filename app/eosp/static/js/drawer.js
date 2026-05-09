@@ -28,6 +28,8 @@ let _onRunCompleteCb = null;
 let _stageData = new Map();
 let _refCountries = [];
 let _refAirportsAll = [];
+/** @type {Promise<void> | null} */
+let _refGeoLoadPromise = null;
 /** @type {string | null} */
 let _editingCaseId = null;
 /** @type {Record<string, unknown> | null} */
@@ -45,6 +47,27 @@ async function _loadReferenceGeo() {
     _refCountries = [];
     _refAirportsAll = [];
   }
+}
+
+function _ensureReferenceGeoLoaded() {
+  if (!_refGeoLoadPromise) {
+    _refGeoLoadPromise = _loadReferenceGeo();
+  }
+  return _refGeoLoadPromise;
+}
+
+function _refreshCaseIntakeGeoSelects() {
+  const form = document.querySelector("#drawer-body form.case-intake-form");
+  if (!form) return;
+  const cSel = form.querySelector('[name="location_country"]');
+  if (!cSel || cSel.tagName !== "SELECT") return;
+  const prev = cSel.value;
+  cSel.innerHTML = _countrySelectOptions();
+  if (prev && [...cSel.options].some((o) => o.value === prev)) {
+    cSel.value = prev;
+  }
+  const apt = form.querySelector('[name="location_airport_code"]')?.value || "";
+  _syncAirportSelect(form, apt);
 }
 
 function _clearInferenceEtaTicker() {
@@ -89,13 +112,14 @@ function _simEtaLine(data) {
 }
 
 export async function initDrawer(onRunComplete) {
-  await _loadReferenceGeo();
   _onRunCompleteCb = onRunComplete;
   await _renderIdle(onRunComplete);
 }
 
 /** Call when the researcher drawer opens: resume SSE if a pipeline job is already running. */
 export async function notifyDrawerOpened() {
+  await _ensureReferenceGeoLoaded();
+  _refreshCaseIntakeGeoSelects();
   await _tryAttachActiveJob(_onRunCompleteCb);
 }
 
@@ -190,7 +214,9 @@ function _syncAirportSelect(form, preserveIata) {
   const country = String(form.querySelector('[name="location_country"]')?.value || "").trim();
   const aptSel = form.querySelector('[name="location_airport_code"]');
   if (!aptSel || aptSel.tagName !== "SELECT") return;
-  const list = country ? _refAirportsAll.filter((a) => a.country === country) : [];
+  const list = country
+    ? _refAirportsAll.filter((a) => a.country === country)
+    : _refAirportsAll;
   aptSel.innerHTML =
     '<option value="">— Optional airport —</option>' +
     list.map((a) => `<option value="${a.iata}">${a.label}</option>`).join("");

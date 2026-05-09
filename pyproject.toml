@@ -47,3 +47,7 @@ package-dir = {"" = "app"}
 
 [tool.setuptools.packages.find]
 where = ["app"]
+
+[tool.vercel]
+# ASGI app lives under the eosp package (app/eosp/main.py), not a default file name.
+entrypoint = "eosp.main:app"

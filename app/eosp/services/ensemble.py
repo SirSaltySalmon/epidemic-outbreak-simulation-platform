@@ -109,6 +109,12 @@ def run_ensemble(
     }
     if geo_forecast is not None:
         metadata["geo_forecast"] = geo_forecast
+    if scenario.name == "baseline":
+        from eosp.services.geo import build_legacy_opensky_geo_snapshot
+
+        metadata["legacy_opensky_geo"] = build_legacy_opensky_geo_snapshot(
+            float(inference.parameters["p_transmit"].mean)
+        )
     response = ForecastResponse(
         scenario=scenario.name,
         forecast=points,

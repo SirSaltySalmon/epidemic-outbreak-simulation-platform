@@ -114,19 +114,35 @@ def _build_geo_outbreak_for_cases(
             return cached
     if effective_risk == "abm_geo":
         try:
-            inference = repo.latest_inference()
-            fc = get_cached_forecast("baseline", repository=repo, inference=inference)
-            abm_geo_forecast = fc.metadata.get("geo_forecast") if fc else None
+            inf = repo.latest_inference()
+            baseline_fc = get_cached_forecast("baseline", repository=repo, inference=inf)
+            abm_geo_forecast = baseline_fc.metadata.get("geo_forecast") if baseline_fc else None
         except (LookupError, ForecastNotCachedError):
+            baseline_fc = None
             abm_geo_forecast = None
     else:
         abm_geo_forecast = None
+        baseline_fc = None
+        if effective_risk == "legacy":
+            try:
+                if inference is not None:
+                    baseline_fc = get_cached_forecast("baseline", repository=repo, inference=inference)
+            except ForecastNotCachedError:
+                baseline_fc = None
+
+    legacy_snap = None
+    if baseline_fc is not None:
+        lg = baseline_fc.metadata.get("legacy_opensky_geo")
+        if isinstance(lg, dict):
+            legacy_snap = lg
+
     return build_outbreak_geo(
         p_transmit=p_transmit,
         cases=cases,
         risk_model=effective_risk,
         metapop_n_runs=metapop_runs,
         abm_geo_forecast=abm_geo_forecast,
+        legacy_opensky_geo=legacy_snap,
     )
 
 

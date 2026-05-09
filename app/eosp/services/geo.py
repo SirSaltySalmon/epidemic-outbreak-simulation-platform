@@ -5,11 +5,11 @@ enriches with airport coordinates, and calls risk_propagation to
 build the global heatmap. Case markers are derived from ingested
 ``CaseRecord`` rows only (no hardcoded outbreak counts).
 
-``risk_model`` selects the heatmap kernel: ``"legacy"`` uses the OpenSky flight-ring
-heuristic; ``"metapop"`` uses the stochastic metapop ensemble; ``"abm_geo"`` uses
-cached ABM geo forecast bucket medians (infectious I) per destination when available,
-otherwise falls back to the legacy OpenSky rings. Any other value is treated as
-``"legacy"`` (documented fallback).
+``risk_model`` selects the heatmap kernel: ``"legacy"`` prefers a **cached** OpenSky flight-ring
+snapshot from the last baseline simulation (Ring‑1‑only hubs if none); ``"metapop"`` uses the stochastic
+metapop ensemble; ``"abm_geo"`` uses cached ABM ``geo_forecast`` bucket medians when available,
+otherwise the same legacy snapshot / hub fallback as above. Any other value is treated as
+``"legacy"``.
 """
 
 from __future__ import annotations
@@ -25,7 +25,7 @@ from eosp.services.patch_codes import iata_from_destination
 from eosp.services.metapop_seed import build_initial_metapop_state
 from eosp.services.mobility import load_mobility_schedule, load_mobility_sidecar_meta
 from eosp.services.opensky import load_airport_coords
-from eosp.services.risk_propagation import compute_risk_zones
+from eosp.services.risk_propagation import compute_ring1_zones_only, compute_risk_zones
 
 _SPEC_PATH = Path(__file__).resolve().parent.parent / "data" / "network_spec.json"
 _DEFAULT_METAPOP_MOBILITY = Path(__file__).resolve().parent.parent / "data" / "mobility_weekly_skeleton.json"
@@ -121,9 +121,8 @@ def _risk_heatmap_rows_from_abm_geo_forecast(
     return rows
 
 
-def _legacy_risk_heatmap_and_metadata(p_transmit: float) -> tuple[list[dict[str, Any]], dict[str, Any]]:
-    risk_zones = compute_risk_zones(p_transmit)
-    heatmap = [
+def _risk_zones_to_heatmap_rows(zones: list[Any]) -> list[dict[str, Any]]:
+    return [
         {
             "airport_iata": z.airport_iata,
             "lat": z.lat,
@@ -133,8 +132,15 @@ def _legacy_risk_heatmap_and_metadata(p_transmit: float) -> tuple[list[dict[str,
             "risk_score": z.risk_score,
             "ring": z.ring,
         }
-        for z in risk_zones
+        for z in zones
     ]
+
+
+def _legacy_risk_heatmap_and_metadata(p_transmit: float) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    """Full Rings 1–3 using live OpenSky (or cache). Call only from forecast/simulation, not page loads."""
+
+    risk_zones = compute_risk_zones(p_transmit)
+    heatmap = _risk_zones_to_heatmap_rows(risk_zones)
     metadata: dict[str, Any] = {
         "p_transmit_used": round(p_transmit, 4),
         "ring1_airports": [z.airport_iata for z in risk_zones if z.ring == 1],
@@ -148,6 +154,41 @@ def _legacy_risk_heatmap_and_metadata(p_transmit: float) -> tuple[list[dict[str,
     return heatmap, metadata
 
 
+def _resolve_legacy_opensky_heatmap(
+    p_transmit: float,
+    legacy_opensky_geo: dict[str, Any] | None,
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    """Serve cached full rings from the last baseline simulation, or Ring-1-only without OpenSky."""
+
+    if legacy_opensky_geo and isinstance(legacy_opensky_geo.get("risk_heatmap"), list):
+        stored_meta = legacy_opensky_geo.get("metadata")
+        meta: dict[str, Any] = dict(stored_meta) if isinstance(stored_meta, dict) else {}
+        meta.setdefault("risk_source", "legacy_opensky_cached_simulation")
+        return list(legacy_opensky_geo["risk_heatmap"]), meta
+    zones = compute_ring1_zones_only(p_transmit)
+    heatmap = _risk_zones_to_heatmap_rows(zones)
+    return heatmap, {
+        "p_transmit_used": round(p_transmit, 4),
+        "ring1_airports": [z.airport_iata for z in zones],
+        "ring2_airports_found": 0,
+        "ring3_airports_found": 0,
+        "risk_source": "legacy_opensky_ring1_only",
+        "risk_heatmap_explanation": (
+            "Evacuation hubs only (Ring 1). Full OpenSky flight rings (Rings 2–3) are computed when you "
+            "run a baseline forecast and stored with the simulation output — not on each page load."
+        ),
+    }
+
+
+def build_legacy_opensky_geo_snapshot(p_transmit: float) -> dict[str, Any]:
+    """Persist with baseline ``ForecastResponse`` so map reads avoid live OpenSky calls."""
+
+    heatmap, meta = _legacy_risk_heatmap_and_metadata(p_transmit)
+    meta = dict(meta)
+    meta["risk_source"] = "legacy_opensky_live_simulation"
+    return {"risk_heatmap": heatmap, "metadata": meta}
+
+
 def build_outbreak_geo(
     *,
     p_transmit: float,
@@ -158,6 +199,7 @@ def build_outbreak_geo(
     ship_outbreak_mass: float | None = None,
     metapop_progress_callback: Callable[[dict[str, Any]], None] | None = None,
     abm_geo_forecast: dict[str, Any] | None = None,
+    legacy_opensky_geo: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Build the complete geo/outbreak payload.
 
@@ -203,13 +245,13 @@ def build_outbreak_geo(
     if rm == "abm_geo":
         by_day = (abm_geo_forecast or {}).get("by_day") or []
         if not by_day:
-            heatmap, meta = _legacy_risk_heatmap_and_metadata(p_transmit)
+            heatmap, meta = _resolve_legacy_opensky_heatmap(p_transmit, legacy_opensky_geo)
             base_expl = str(meta["risk_heatmap_explanation"])
             meta["risk_source"] = "legacy_opensky_fallback"
             meta["abm_geo_fallback_reason"] = "no_cached_baseline_geo_forecast"
             meta["risk_heatmap_explanation"] = (
                 base_expl
-                + " Fallback: requested ABM geo forecast was unavailable; using OpenSky rings instead."
+                + " Fallback: ABM geo forecast was unavailable; showing cached flight rings or hub-only heatmap."
             )
             return {
                 "ship": ship,
@@ -239,7 +281,7 @@ def build_outbreak_geo(
         }
 
     if rm != "metapop":
-        heatmap, meta = _legacy_risk_heatmap_and_metadata(p_transmit)
+        heatmap, meta = _resolve_legacy_opensky_heatmap(p_transmit, legacy_opensky_geo)
         return {
             "ship": ship,
             "confirmed_cases": confirmed_cases,

@@ -56,6 +56,31 @@ def _coords() -> dict:
     return _COORDS
 
 
+def compute_ring1_zones_only(p_transmit: float) -> list[RiskZone]:
+    """Ring-1 evacuation hubs only (no OpenSky). Used when no cached full-ring snapshot exists."""
+
+    coords = _coords()
+    zones: list[RiskZone] = []
+    for evt in _EVACUATION_EVENTS:
+        iata = evt["airport_iata"]
+        if iata not in coords:
+            continue
+        c = coords[iata]
+        ring1_score = min(1.0, (evt["passengers"] / _TOTAL_EVACUEES) * p_transmit * 12.0)
+        zones.append(
+            RiskZone(
+                airport_iata=iata,
+                lat=c["lat"],
+                lng=c["lng"],
+                city=c["city"],
+                country=c["country"],
+                risk_score=ring1_score,
+                ring=1,
+            ),
+        )
+    return sorted(zones, key=lambda z: (-z.ring, -z.risk_score))
+
+
 def compute_risk_zones(p_transmit: float) -> list[RiskZone]:
     """Build the full risk zone list for the geo/outbreak endpoint.
 

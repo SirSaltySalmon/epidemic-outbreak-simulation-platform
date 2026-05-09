@@ -386,6 +386,24 @@ def test_case_summary_matches_seed_outbreak():
     assert "external_feed_last_checked_at" in payload
 
 
+def test_baseline_forecast_stores_legacy_opensky_geo_snapshot():
+    _run_forecasts("baseline")
+    payload = client.get("/api/v1/forecasts/baseline").json()
+    snap = payload["metadata"].get("legacy_opensky_geo")
+    assert isinstance(snap, dict)
+    assert "risk_heatmap" in snap and "metadata" in snap
+    assert isinstance(snap["risk_heatmap"], list)
+
+
+def test_geo_legacy_uses_cached_rings_after_baseline_run():
+    _run_forecasts("baseline")
+    geo = client.get("/api/v1/geo/outbreak?risk_model=legacy").json()
+    assert geo["metadata"].get("risk_source") in (
+        "legacy_opensky_cached_simulation",
+        "legacy_opensky_live_simulation",
+    )
+
+
 def test_forecast_includes_credible_intervals():
     _run_forecasts("baseline")
     response = client.get("/api/v1/forecasts/baseline")

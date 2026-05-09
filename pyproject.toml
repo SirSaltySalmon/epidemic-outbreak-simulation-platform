@@ -50,4 +50,4 @@ where = ["app"]
 
 [tool.vercel]
 # ASGI app lives under the eosp package (app/eosp/main.py), not a default file name.
-entrypoint = app.eosp.main:app
+entrypoint = "app.eosp.main:app"

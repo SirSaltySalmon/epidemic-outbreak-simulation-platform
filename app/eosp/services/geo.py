@@ -6,8 +6,10 @@ build the global heatmap. Case markers are derived from ingested
 ``CaseRecord`` rows only (no hardcoded outbreak counts).
 
 ``risk_model`` selects the heatmap kernel: ``"legacy"`` uses the OpenSky flight-ring
-heuristic; ``"metapop"`` uses the stochastic metapop ensemble. Any other value is
-treated as ``"legacy"`` (documented fallback).
+heuristic; ``"metapop"`` uses the stochastic metapop ensemble; ``"abm_geo"`` uses
+cached ABM geo forecast bucket medians (infectious I) per destination when available,
+otherwise falls back to the legacy OpenSky rings. Any other value is treated as
+``"legacy"`` (documented fallback).
 """
 
 from __future__ import annotations
@@ -19,6 +21,7 @@ from typing import Any, Callable
 
 from eosp.core.models import CaseRecord, CaseStatus, ObservationKind
 from eosp.services.metapop import MetapopParams, run_ensemble_metapop
+from eosp.services.patch_codes import iata_from_destination
 from eosp.services.metapop_seed import build_initial_metapop_state
 from eosp.services.mobility import load_mobility_schedule, load_mobility_sidecar_meta
 from eosp.services.opensky import load_airport_coords
@@ -83,6 +86,68 @@ def _case_markers_from_records(cases: list[CaseRecord], airport_coords: dict[str
     return out
 
 
+def _risk_heatmap_rows_from_abm_geo_forecast(
+    abm_geo_forecast: dict[str, Any], coords: dict[str, Any]
+) -> list[dict[str, Any]]:
+    """Build heatmap rows from ABM geo forecast bucket stats on the final forecast day."""
+
+    by_day = abm_geo_forecast["by_day"]
+    last = by_day[-1]
+    buckets = last.get("buckets") or {}
+    rows: list[dict[str, Any]] = []
+    for code, stats in buckets.items():
+        if code == "ship":
+            continue
+        if not isinstance(stats, dict):
+            continue
+        block = stats.get("infectious_I")
+        if block is None:
+            if "median" in stats and not any(isinstance(v, dict) for v in stats.values()):
+                block = stats
+        median_i = float(block["median"]) if block and "median" in block else 0.0
+        iata = iata_from_destination(code)
+        loc = coords.get(iata)
+        if loc is None:
+            continue
+        rows.append({
+            "airport_iata": iata,
+            "lat": float(loc["lat"]),
+            "lng": float(loc["lng"]),
+            "city": str(loc.get("city", "")),
+            "country": str(loc.get("country", "")),
+            "risk_score": median_i,
+            "ring": 0,
+        })
+    return rows
+
+
+def _legacy_risk_heatmap_and_metadata(p_transmit: float) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    risk_zones = compute_risk_zones(p_transmit)
+    heatmap = [
+        {
+            "airport_iata": z.airport_iata,
+            "lat": z.lat,
+            "lng": z.lng,
+            "city": z.city,
+            "country": z.country,
+            "risk_score": z.risk_score,
+            "ring": z.ring,
+        }
+        for z in risk_zones
+    ]
+    metadata: dict[str, Any] = {
+        "p_transmit_used": round(p_transmit, 4),
+        "ring1_airports": [z.airport_iata for z in risk_zones if z.ring == 1],
+        "ring2_airports_found": sum(1 for z in risk_zones if z.ring == 2),
+        "ring3_airports_found": sum(1 for z in risk_zones if z.ring == 3),
+        "risk_heatmap_explanation": (
+            "OpenSky flight-ring heuristic: relative connectivity-weighted hazard from evacuation hubs "
+            "and onward flights, scaled by inferred p_transmit. Not a count of predicted cases per airport."
+        ),
+    }
+    return heatmap, metadata
+
+
 def build_outbreak_geo(
     *,
     p_transmit: float,
@@ -92,6 +157,7 @@ def build_outbreak_geo(
     metapop_mobility_path: Path | None = None,
     ship_outbreak_mass: float | None = None,
     metapop_progress_callback: Callable[[dict[str, Any]], None] | None = None,
+    abm_geo_forecast: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Build the complete geo/outbreak payload.
 
@@ -133,23 +199,26 @@ def build_outbreak_geo(
         })
 
     rm = (risk_model or "legacy").strip().lower()
-    use_metapop = rm == "metapop"
 
-    if not use_metapop:
-        risk_zones = compute_risk_zones(p_transmit)
-        heatmap = [
-            {
-                "airport_iata": z.airport_iata,
-                "lat": z.lat,
-                "lng": z.lng,
-                "city": z.city,
-                "country": z.country,
-                "risk_score": z.risk_score,
-                "ring": z.ring,
+    if rm == "abm_geo":
+        by_day = (abm_geo_forecast or {}).get("by_day") or []
+        if not by_day:
+            heatmap, meta = _legacy_risk_heatmap_and_metadata(p_transmit)
+            base_expl = str(meta["risk_heatmap_explanation"])
+            meta["risk_source"] = "legacy_opensky_fallback"
+            meta["abm_geo_fallback_reason"] = "no_cached_baseline_geo_forecast"
+            meta["risk_heatmap_explanation"] = (
+                base_expl
+                + " Fallback: requested ABM geo forecast was unavailable; using OpenSky rings instead."
+            )
+            return {
+                "ship": ship,
+                "confirmed_cases": confirmed_cases,
+                "evacuation_flights": evacuation_flights,
+                "risk_heatmap": heatmap,
+                "metadata": meta,
             }
-            for z in risk_zones
-        ]
-
+        heatmap = _risk_heatmap_rows_from_abm_geo_forecast(abm_geo_forecast, coords)
         return {
             "ship": ship,
             "confirmed_cases": confirmed_cases,
@@ -157,14 +226,26 @@ def build_outbreak_geo(
             "risk_heatmap": heatmap,
             "metadata": {
                 "p_transmit_used": round(p_transmit, 4),
-                "ring1_airports": [z.airport_iata for z in risk_zones if z.ring == 1],
-                "ring2_airports_found": sum(1 for z in risk_zones if z.ring == 2),
-                "ring3_airports_found": sum(1 for z in risk_zones if z.ring == 3),
+                "ring1_airports": [],
+                "ring2_airports_found": 0,
+                "ring3_airports_found": 0,
+                "risk_source": "abm_geo_forecast",
+                "risk_metric_id": "infectious_present_median_final_day",
                 "risk_heatmap_explanation": (
-                    "OpenSky flight-ring heuristic: relative connectivity-weighted hazard from evacuation hubs "
-                    "and onward flights, scaled by inferred p_transmit. Not a count of predicted cases per airport."
+                    "ABM ensemble median count of infectious (I) agents per destination bucket on the final "
+                    "forecast day — model-structured, not reported incidence."
                 ),
             },
+        }
+
+    if rm != "metapop":
+        heatmap, meta = _legacy_risk_heatmap_and_metadata(p_transmit)
+        return {
+            "ship": ship,
+            "confirmed_cases": confirmed_cases,
+            "evacuation_flights": evacuation_flights,
+            "risk_heatmap": heatmap,
+            "metadata": meta,
         }
 
     if metapop_mobility_path is not None:

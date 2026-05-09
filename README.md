@@ -13,18 +13,8 @@ Forecasts are read only from completed simulation results stored in the active r
 
 ## Run
 
-Runtime dependencies are listed in `pyproject.toml` (`dependencies`). **Bayesian inference**
-(NumPyro / JAX / ArviZ) is optional — install when workers run NUTS:
-
 ```powershell
-python -m pip install -e ".[inference]"
-python -m uvicorn eosp.main:app --app-dir app --reload
-```
-
-API-only or development without inference wheels:
-
-```powershell
-python -m pip install -e .
+python -m pip install -e ".[test]"
 python -m uvicorn eosp.main:app --app-dir app --reload
 ```
 
@@ -37,7 +27,6 @@ Start local services:
 ```powershell
 Copy-Item .env.example .env
 docker compose up -d
-python -m pip install -e ".[inference]"
 python -m alembic upgrade head
 python -m eosp.scripts.seed_dev_data
 python -m uvicorn eosp.main:app --app-dir app --reload
@@ -47,10 +36,7 @@ PostgreSQL runs on `127.0.0.1:5432`; Redis runs on `127.0.0.1:6379`.
 
 ## Test
 
-Includes inference integration tests — install test + inference extras:
-
 ```powershell
-python -m pip install -e ".[test,inference]"
 python -m pytest
 ```
 
@@ -58,7 +44,7 @@ python -m pytest
 
 OpenFlights [Airport and Route databases](https://openflights.org/data.html) are under the [**Open Database License (ODbL)**](https://opendatacommons.org/licenses/odbl/). You may commit `data/raw/openflights/airports.dat` and `routes.dat` in this repo (they are not gitignored); attribute the source and respect ODbL share-alike terms if you redistribute derivatives.
 
-The metapop risk map can consume a mobility schedule built from route data. With the project installed (`python -m pip install -e .` or `".[inference]"` if you need the full server stack), run:
+The metapop risk map can consume a mobility schedule built from route data. With the project installed (`python -m pip install -e ".[test]"` or similar), run:
 
 ```powershell
 python -m eosp.scripts.build_mobility_bundle --routes data/raw/openflights/routes.dat --out-json app/eosp/data/bundles/example.json

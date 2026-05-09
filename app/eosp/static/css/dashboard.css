@@ -436,7 +436,7 @@
   color: var(--ink-muted);
   font-size: 0.875rem;
   line-height: 1.6;
-  max-width: min(65ch, 100%);
+  max-width: 100%;
 }
 .model-explain-bullets li {
   margin-bottom: 12px;
@@ -466,7 +466,7 @@
   color: var(--ink-muted);
   font-size: 0.8125rem;
   line-height: 1.62;
-  max-width: min(72ch, 100%);
+  max-width: 100%;
 }
 .model-technical-body p {
   margin-bottom: 14px;

@@ -1,8 +1,0 @@
-# Keep UI-only deploys tiny — nothing below should appear under app/eosp/static/ today,
-# but these patterns avoid accidental huge uploads if assets are added later.
-node_modules
-.git
-**/*.map
-**/*.log
-.DS_Store
-Thumbs.db

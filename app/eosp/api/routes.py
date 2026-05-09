@@ -1,5 +1,6 @@
 import asyncio
 import json
+from typing import Any
 from uuid import UUID
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request, Response, status
@@ -57,6 +58,78 @@ def _no_simulation_results_detail(scenario: str | None = None) -> str:
     )
 
 
+def _inference_versions_dicts(repo: Any, limit: int) -> list[dict[str, Any]]:
+    versions: list[dict[str, Any]] = []
+    for inference in repo.inferences[:limit]:
+        diag = inference.diagnostics
+        rhat = diag.get("rhat") or {}
+        versions.append(
+            {
+                "version_id": inference.version,
+                "timestamp": inference.timestamp,
+                "trigger": inference.trigger,
+                "n_cases": inference.n_cases,
+                "convergence_status": diag.get("convergence_status", "UNKNOWN"),
+                "rhat_max": max(rhat.values()) if rhat else None,
+                "divergence_count": diag.get("divergences", 0),
+                "data_quality_mean": diag.get("data_quality_mean"),
+            }
+        )
+    return versions
+
+
+def _build_geo_outbreak_for_cases(
+    repo: Any,
+    cases: list[CaseRecord],
+    risk_model: str | None,
+    metapop_runs: int | None,
+) -> dict[str, Any]:
+    """Shared kernel for ``GET /geo/outbreak`` and ``GET /dashboard/bootstrap``."""
+
+    settings = get_settings()
+    effective_risk = risk_model if risk_model is not None else settings.geo_risk_model
+    effective_risk = (effective_risk or "").lower()
+    if effective_risk not in ("legacy", "metapop", "abm_geo"):
+        effective_risk = "legacy"
+    if effective_risk == "metapop" and not settings.metapop_enabled:
+        effective_risk = "legacy"
+    p_transmit = 1.5 / 21.5
+    inference_version: str | None = None
+    try:
+        inference = repo.latest_inference()
+        if inference is not None and "p_transmit" in inference.parameters:
+            p_transmit = float(inference.parameters["p_transmit"].mean)
+        if inference is not None:
+            inference_version = inference.version
+    except LookupError:
+        pass
+    if (
+        settings.metapop_enabled
+        and effective_risk == "metapop"
+        and inference_version
+        and hasattr(repo, "get_geo_outbreak_cache")
+    ):
+        cached = repo.get_geo_outbreak_cache(inference_version, metapop_runs=metapop_runs)
+        if cached is not None:
+            return cached
+    if effective_risk == "abm_geo":
+        try:
+            inference = repo.latest_inference()
+            fc = get_cached_forecast("baseline", repository=repo, inference=inference)
+            abm_geo_forecast = fc.metadata.get("geo_forecast") if fc else None
+        except (LookupError, ForecastNotCachedError):
+            abm_geo_forecast = None
+    else:
+        abm_geo_forecast = None
+    return build_outbreak_geo(
+        p_transmit=p_transmit,
+        cases=cases,
+        risk_model=effective_risk,
+        metapop_n_runs=metapop_runs,
+        abm_geo_forecast=abm_geo_forecast,
+    )
+
+
 class InferenceRunBody(BaseModel):
     reason: str = Field(default="manual", max_length=500)
     scenarios: list[str] | None = None
@@ -108,6 +181,84 @@ def health(request: Request) -> dict[str, object]:
     return payload
 
 
+@router.get("/dashboard/bootstrap")
+def dashboard_bootstrap(
+    request: Request,
+    http_response: Response,
+    scenarios: str = Query(
+        default="baseline,quarantine_immediate,evacuation_delay_7d,enhanced_destination_protocols",
+    ),
+    version_limit: int = Query(default=2, ge=1, le=50),
+    risk_model: str | None = Query(default=None),
+    metapop_runs: int | None = Query(default=None, ge=1, le=5000),
+) -> dict[str, Any]:
+    """One round-trip for the public dashboard: shared case read + geo + forecasts."""
+
+    http_response.headers["Cache-Control"] = _CACHE_DASHBOARD_AGGREGATE
+    repo = request.app.state.repository
+    cases, summary_tuple = repo.load_dashboard_cases_bundle()
+    confirmed, suspected, deaths, last_updated, sources, feed_last = summary_tuple
+    fd_med, fd_lo, fd_hi = _baseline_forecast_deaths_final_day(repo)
+    summary = CaseSummary(
+        total_confirmed=confirmed,
+        total_suspected=suspected,
+        total_deaths=deaths,
+        last_updated=last_updated,
+        data_sources=sources,
+        external_feed_last_checked_at=feed_last,
+        forecast_deaths_median_14d=fd_med,
+        forecast_deaths_ci_95_lower_14d=fd_lo,
+        forecast_deaths_ci_95_upper_14d=fd_hi,
+    )
+    geo = _build_geo_outbreak_for_cases(repo, cases, risk_model, metapop_runs)
+    version_dicts = _inference_versions_dicts(repo, version_limit)
+
+    forecast_baseline: ForecastResponse | None = None
+    forecast_prev: ForecastResponse | None = None
+    errors: dict[str, str] = {}
+
+    try:
+        forecast_baseline = get_cached_forecast("baseline", repository=repo)
+    except ForecastNotCachedError as exc:
+        errors["forecast_baseline"] = _no_simulation_results_detail(exc.scenario)
+
+    if version_dicts and len(version_dicts) > 1 and forecast_baseline is not None:
+        v_prev = version_dicts[1]["version_id"]
+        infer_prev = repo.get_inference(v_prev)
+        if infer_prev is not None:
+            try:
+                forecast_prev = get_cached_forecast(
+                    "baseline",
+                    repository=repo,
+                    inference=infer_prev,
+                    require_version_match=True,
+                )
+            except ForecastNotCachedError:
+                forecast_prev = None
+
+    scenario_names = [name.strip() for name in scenarios.split(",") if name.strip()]
+    unknown = [name for name in scenario_names if name not in SCENARIO_CONFIG]
+    scenarios_payload = None
+    if unknown:
+        errors["scenarios"] = f"Unknown scenario(s): {', '.join(unknown)}"
+    else:
+        try:
+            scenarios_payload = compare_scenarios(scenario_names, repository=repo)
+        except ForecastNotCachedError as exc:
+            errors["scenarios"] = _no_simulation_results_detail(exc.scenario)
+
+    return {
+        "summary": summary.model_dump(mode="json"),
+        "cases": [c.model_dump(mode="json") for c in cases],
+        "geo": geo,
+        "forecast_baseline": forecast_baseline.model_dump(mode="json") if forecast_baseline else None,
+        "forecast_baseline_prev": forecast_prev.model_dump(mode="json") if forecast_prev else None,
+        "versions": {"versions": version_dicts},
+        "scenarios": scenarios_payload.model_dump(mode="json") if scenarios_payload else None,
+        "errors": errors,
+    }
+
+
 @router.get("/geo/outbreak")
 def geo_outbreak(
     request: Request,
@@ -116,50 +267,9 @@ def geo_outbreak(
     metapop_runs: int | None = Query(default=None, ge=1, le=5000),
 ):
     http_response.headers["Cache-Control"] = _CACHE_DASHBOARD_AGGREGATE
-    settings = get_settings()
-    effective_risk = risk_model if risk_model is not None else settings.geo_risk_model
-    effective_risk = (effective_risk or "").lower()
-    if effective_risk not in ("legacy", "metapop", "abm_geo"):
-        effective_risk = "legacy"
-    if effective_risk == "metapop" and not settings.metapop_enabled:
-        effective_risk = "legacy"
     repo = request.app.state.repository
-    p_transmit = 1.5 / 21.5  # Beta(1.5, 20) prior mean when no posterior yet
-    inference_version: str | None = None
-    try:
-        inference = repo.latest_inference()
-        if inference is not None and "p_transmit" in inference.parameters:
-            p_transmit = float(inference.parameters["p_transmit"].mean)
-        if inference is not None:
-            inference_version = inference.version
-    except LookupError:
-        pass
-    if (
-        settings.metapop_enabled
-        and effective_risk == "metapop"
-        and inference_version
-        and hasattr(repo, "get_geo_outbreak_cache")
-    ):
-        cached = repo.get_geo_outbreak_cache(inference_version, metapop_runs=metapop_runs)
-        if cached is not None:
-            return cached
-    if effective_risk == "abm_geo":
-        try:
-            inference = repo.latest_inference()
-            fc = get_cached_forecast("baseline", repository=repo, inference=inference)
-            abm_geo_forecast = fc.metadata.get("geo_forecast") if fc else None
-        except (LookupError, ForecastNotCachedError):
-            abm_geo_forecast = None
-    else:
-        abm_geo_forecast = None
     cases = repo.list_cases()
-    return build_outbreak_geo(
-        p_transmit=p_transmit,
-        cases=cases,
-        risk_model=effective_risk,
-        metapop_n_runs=metapop_runs,
-        abm_geo_forecast=abm_geo_forecast,
-    )
+    return _build_geo_outbreak_for_cases(repo, cases, risk_model, metapop_runs)
 
 
 @router.get("/cases/summary", response_model=CaseSummary)
@@ -490,23 +600,7 @@ async def job_events_stream(
 @router.get("/inference/versions")
 def inference_versions(request: Request, http_response: Response, limit: int = Query(default=10, ge=1, le=50)):
     http_response.headers["Cache-Control"] = _CACHE_DASHBOARD_AGGREGATE
-    versions = []
-    for inference in request.app.state.repository.inferences[:limit]:
-        diag = inference.diagnostics
-        rhat = diag.get("rhat") or {}
-        versions.append(
-            {
-                "version_id": inference.version,
-                "timestamp": inference.timestamp,
-                "trigger": inference.trigger,
-                "n_cases": inference.n_cases,
-                "convergence_status": diag.get("convergence_status", "UNKNOWN"),
-                "rhat_max": max(rhat.values()) if rhat else None,
-                "divergence_count": diag.get("divergences", 0),
-                "data_quality_mean": diag.get("data_quality_mean"),
-            }
-        )
-    return {"versions": versions}
+    return {"versions": _inference_versions_dicts(request.app.state.repository, limit)}
 
 
 @router.get("/inference/compare")

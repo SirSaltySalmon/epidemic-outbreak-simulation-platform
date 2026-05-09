@@ -132,6 +132,35 @@ def test_cases_summary_allows_public_cache():
     assert "max-age=" in cc
 
 
+def test_dashboard_bootstrap_allows_public_cache():
+    r = client.get("/api/v1/dashboard/bootstrap")
+    assert r.status_code == 200
+    cc = r.headers.get("cache-control", "")
+    assert "public" in cc
+    assert "max-age=" in cc
+
+
+def test_dashboard_bootstrap_matches_disaggregated_endpoints():
+    b = client.get("/api/v1/dashboard/bootstrap?version_limit=2").json()
+    summary = client.get("/api/v1/cases/summary").json()
+    assert b["summary"]["total_confirmed"] == summary["total_confirmed"]
+    assert b["summary"]["total_deaths"] == summary["total_deaths"]
+    cases = client.get("/api/v1/cases").json()
+    assert len(b["cases"]) == len(cases)
+    geo = client.get("/api/v1/geo/outbreak").json()
+    assert b["geo"]["ship"]["name"] == geo["ship"]["name"]
+    versions = client.get("/api/v1/inference/versions?limit=2").json()
+    assert len(b["versions"]["versions"]) == len(versions["versions"])
+
+
+def test_dashboard_bootstrap_unknown_scenario_returns_error_field():
+    r = client.get("/api/v1/dashboard/bootstrap?scenarios=baseline,not_a_real_scenario")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["scenarios"] is None
+    assert "not_a_real_scenario" in body["errors"]["scenarios"]
+
+
 def test_console_access_denied_for_patch_when_claims_lack_flag():
     app.dependency_overrides[require_clerk_session] = lambda: {"sub": "user_test", "public_metadata": {}}
     try:

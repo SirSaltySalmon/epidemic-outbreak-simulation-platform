@@ -73,6 +73,22 @@ class InMemoryRepository:
             records = [case for case in records if case.confirmed_or_suspected == status]
         return sorted(records, key=lambda case: case.symptom_onset_date)
 
+    def load_dashboard_cases_bundle(
+        self,
+    ) -> tuple[list[CaseRecord], tuple[int, int, int, datetime, dict[str, int], datetime | None]]:
+        """Single pass over in-memory case rows plus feed timestamp for dashboard bootstrap."""
+
+        feed_last = max(
+            (f.last_checked_at for f in self.external_feed_snapshots.values()),
+            default=None,
+        )
+        cases = sorted(self.cases, key=lambda case: case.symptom_onset_date)
+        if not cases:
+            return [], (0, 0, 0, datetime.now(UTC), {}, feed_last)
+        confirmed, suspected, deaths, sources = case_summary_person_totals(cases)
+        last_updated = max(case.ingestion_timestamp for case in cases)
+        return cases, (confirmed, suspected, deaths, last_updated, sources, feed_last)
+
     def get_validation(self, case_id: UUID) -> ValidationResult | None:
         return self.validations.get(case_id)
 
@@ -321,6 +337,26 @@ class SqlRepository:
                 query = query.filter(CaseRecordRow.confirmed_or_suspected == status.value)
             rows = query.order_by(CaseRecordRow.symptom_onset_date).all()
             return [_case_from_row(row) for row in rows]
+
+    def load_dashboard_cases_bundle(
+        self,
+    ) -> tuple[list[CaseRecord], tuple[int, int, int, datetime, dict[str, int], datetime | None]]:
+        """One query for active cases, one scalar for feed heartbeat — avoids duplicate full-table reads."""
+
+        with self.session_factory() as session:
+            feed_last = session.query(func.max(ExternalFeedStateRow.last_checked_at)).scalar()
+            rows = (
+                session.query(CaseRecordRow)
+                .filter(CaseRecordRow.active.is_(True))
+                .order_by(CaseRecordRow.symptom_onset_date)
+                .all()
+            )
+            if not rows:
+                return [], (0, 0, 0, datetime.now(UTC), {}, feed_last)
+            models = [_case_from_row(row) for row in rows]
+            confirmed, suspected, deaths, sources = case_summary_person_totals(models)
+            last_updated = max(row.ingestion_timestamp for row in rows)
+            return models, (confirmed, suspected, deaths, last_updated, sources, feed_last)
 
     def get_validation(self, case_id: UUID) -> ValidationResult | None:
         with self.session_factory() as session:

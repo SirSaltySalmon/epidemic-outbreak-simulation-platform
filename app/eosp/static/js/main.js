@@ -10,85 +10,19 @@ import { initAuth } from "./auth.js";
 import { initDrawer, notifyDrawerOpened } from "./drawer.js";
 import { applyCasesList } from "./cases.js";
 
+const _DASHBOARD_BOOTSTRAP =
+  "/dashboard/bootstrap?" + SCENARIOS_COMPARE_QUERY + "&version_limit=2";
+
 async function boot() {
   const authPromise = initAuth();
-  // Clerk, CDN libraries (Leaflet/Plotly), and dashboard APIs run together;
-  // await Clerk again before initDrawer so console routes see Bearer tokens.
-  const [, settled] = await Promise.all([
-    _waitForLibs(),
-    Promise.allSettled([
-      get("/cases/summary"),
-      get("/forecasts/baseline"),
-      get("/inference/versions?limit=2"),
-      get("/scenarios/compare?" + SCENARIOS_COMPARE_QUERY),
-      get("/geo/outbreak"),
-      get("/cases"),
-    ]),
-  ]);
-  const [summary, forecast, versions, scenarios, geo, caseLines] = settled;
-
-  if (summary.status === "fulfilled") {
-    _applySummaryKpis(summary.value);
-    setInterval(async () => {
-      try {
-        const fresh = await get("/cases/summary");
-        _applySummaryKpis(fresh);
-      } catch (_) {}
-    }, 60_000);
-  }
-
-  // Version badge
-  if (versions.status === "fulfilled" && versions.value.versions.length) {
-    const v = versions.value.versions[0];
-    const badge = document.getElementById("version-badge");
-    if (badge) {
-      badge.textContent = v.version_id;
-      badge.className = "version-badge " + (v.convergence_status === "CONVERGED" ? "converged" : v.convergence_status === "WARNING" ? "warning" : "failed");
-    }
-  }
-
-  if (forecast.status === "fulfilled") {
-    const prev = versions.status === "fulfilled" && versions.value.versions.length > 1
-      ? await get(`/forecasts/baseline?model_version=${versions.value.versions[1].version_id}`).catch(() => null)
-      : null;
-    renderForecast("forecast-chart", forecast.value, prev);
-    _applyForecastKpis(
-      forecast.value,
-      summary.status === "fulfilled" ? summary.value : null,
-    );
-    _setText("chart-freshness", _forecastFreshnessLabel(forecast.value));
-  } else {
-    purgeForecastChart("forecast-chart");
-    const msg = forecast.reason instanceof Error ? forecast.reason.message : String(forecast.reason);
-    _setText("chart-freshness", "");
-    _applyForecastKpis(
-      null,
-      summary.status === "fulfilled" ? summary.value : null,
-    );
-    _setText("chart-explanation", msg ? `Forecast not loaded: ${msg}` : "Forecast not loaded.");
-  }
-
-  // Scenario cards (always render shell; partial API responses / failures still show cards)
-  if (scenarios.status === "fulfilled") {
-    renderScenarios(scenarios.value);
-  } else {
-    const msg = scenarios.reason instanceof Error ? scenarios.reason.message : String(scenarios.reason);
-    renderScenarios(null, { fetchError: msg });
-  }
-
-  if (caseLines.status === "fulfilled") {
-    const rows = caseLines.value;
-    applyCasesList(Array.isArray(rows) ? rows : []);
-  } else {
-    const msg = caseLines.reason instanceof Error ? caseLines.reason.message : String(caseLines.reason);
-    applyCasesList(null, msg);
-  }
+  const [, data] = await Promise.all([_waitForLibs(), get(_DASHBOARD_BOOTSTRAP)]);
+  _applyDashboardBundle(data);
 
   // World map
   initMap("world-map");
-  if (geo.status === "fulfilled") {
-    const gf = forecast.status === "fulfilled" ? forecast.value.metadata?.geo_forecast : null;
-    renderGeoData(geo.value, gf);
+  const gf = data.forecast_baseline?.metadata?.geo_forecast ?? null;
+  if (data.geo) {
+    renderGeoData(data.geo, gf);
   }
 
   // Researcher drawer wiring (after Clerk — jobs/active needs a token in prod)
@@ -97,52 +31,96 @@ async function boot() {
   _wireDrawerToggle();
 }
 
+/** @param {any} data — JSON from ``GET /api/v1/dashboard/bootstrap`` */
+function _applyDashboardBundle(data) {
+  if (data.summary) {
+    _applySummaryKpis(data.summary);
+    setInterval(async () => {
+      try {
+        const fresh = await get("/cases/summary");
+        _applySummaryKpis(fresh);
+      } catch (_) {}
+    }, 60_000);
+  }
+
+  const versions = data.versions;
+  if (versions?.versions?.length) {
+    const v = versions.versions[0];
+    const badge = document.getElementById("version-badge");
+    if (badge) {
+      badge.textContent = v.version_id;
+      badge.className = "version-badge " + (v.convergence_status === "CONVERGED" ? "converged" : v.convergence_status === "WARNING" ? "warning" : "failed");
+    }
+  }
+
+  const errForecast = data.errors?.forecast_baseline;
+  if (data.forecast_baseline && !errForecast) {
+    renderForecast(
+      "forecast-chart",
+      data.forecast_baseline,
+      data.forecast_baseline_prev ?? null,
+    );
+    _applyForecastKpis(data.forecast_baseline, data.summary ?? null);
+    _setText("chart-freshness", _forecastFreshnessLabel(data.forecast_baseline));
+  } else {
+    purgeForecastChart("forecast-chart");
+    _setText("chart-freshness", "");
+    _applyForecastKpis(null, data.summary ?? null);
+    _setText(
+      "chart-explanation",
+      errForecast ? `Forecast not loaded: ${errForecast}` : "Forecast not loaded.",
+    );
+  }
+
+  const errScenarios = data.errors?.scenarios;
+  if (data.scenarios && !errScenarios) {
+    renderScenarios(data.scenarios);
+  } else {
+    renderScenarios(null, { fetchError: errScenarios || "Scenario compare unavailable." });
+  }
+
+  applyCasesList(Array.isArray(data.cases) ? data.cases : []);
+}
+
 function _onRunComplete() {
-  Promise.allSettled([
-    get("/cases/summary"),
-    get("/forecasts/baseline"),
-    get("/scenarios/compare?" + SCENARIOS_COMPARE_QUERY),
-    get("/inference/versions?limit=2"),
-    get("/geo/outbreak"),
-    get("/cases"),
-  ]).then(([summary, forecast, scenarios, versions, geo, caseLines]) => {
-    if (summary.status === "fulfilled") {
-      _applySummaryKpis(summary.value);
-    }
-    if (forecast.status === "fulfilled") {
-      renderForecast("forecast-chart", forecast.value);
-      _applyForecastKpis(forecast.value, summary.status === "fulfilled" ? summary.value : null);
-      _setText("chart-freshness", _forecastFreshnessLabel(forecast.value));
-    } else {
-      purgeForecastChart("forecast-chart");
-      const msg = forecast.reason instanceof Error ? forecast.reason.message : String(forecast.reason);
-      _setText("chart-freshness", "");
-      _applyForecastKpis(null, summary.status === "fulfilled" ? summary.value : null);
-      _setText("chart-explanation", msg ? `Forecast not loaded: ${msg}` : "Forecast not loaded.");
-    }
-    if (scenarios.status === "fulfilled") {
-      renderScenarios(scenarios.value);
-    } else {
-      const msg = scenarios.reason instanceof Error ? scenarios.reason.message : String(scenarios.reason);
-      renderScenarios(null, { fetchError: msg });
-    }
-    if (geo.status === "fulfilled") {
-      const gf = forecast.status === "fulfilled" ? forecast.value.metadata?.geo_forecast : null;
-      renderGeoData(geo.value, gf);
-    }
-    if (versions.status === "fulfilled" && versions.value.versions.length) {
-      const v = versions.value.versions[0];
-      const badge = document.getElementById("version-badge");
-      if (badge) badge.textContent = v.version_id;
-    }
-    if (caseLines.status === "fulfilled") {
-      const rows = caseLines.value;
-      applyCasesList(Array.isArray(rows) ? rows : []);
-    } else {
-      const msg = caseLines.reason instanceof Error ? caseLines.reason.message : String(caseLines.reason);
-      applyCasesList(null, msg);
-    }
-  });
+  get(_DASHBOARD_BOOTSTRAP)
+    .then((data) => {
+      if (data.summary) {
+        _applySummaryKpis(data.summary);
+      }
+      const errForecast = data.errors?.forecast_baseline;
+      if (data.forecast_baseline && !errForecast) {
+        renderForecast("forecast-chart", data.forecast_baseline);
+        _applyForecastKpis(data.forecast_baseline, data.summary ?? null);
+        _setText("chart-freshness", _forecastFreshnessLabel(data.forecast_baseline));
+      } else {
+        purgeForecastChart("forecast-chart");
+        _setText("chart-freshness", "");
+        _applyForecastKpis(null, data.summary ?? null);
+        _setText(
+          "chart-explanation",
+          errForecast ? `Forecast not loaded: ${errForecast}` : "Forecast not loaded.",
+        );
+      }
+      const errScenarios = data.errors?.scenarios;
+      if (data.scenarios && !errScenarios) {
+        renderScenarios(data.scenarios);
+      } else {
+        renderScenarios(null, { fetchError: errScenarios || "Scenario compare unavailable." });
+      }
+      if (data.geo) {
+        const gf = data.forecast_baseline?.metadata?.geo_forecast ?? null;
+        renderGeoData(data.geo, gf);
+      }
+      const versions = data.versions;
+      if (versions?.versions?.length) {
+        const v = versions.versions[0];
+        const badge = document.getElementById("version-badge");
+        if (badge) badge.textContent = v.version_id;
+      }
+      applyCasesList(Array.isArray(data.cases) ? data.cases : []);
+    })
+    .catch(() => {});
 }
 
 function _wireDrawerToggle() {

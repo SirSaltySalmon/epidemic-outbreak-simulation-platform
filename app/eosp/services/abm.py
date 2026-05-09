@@ -33,6 +33,7 @@ class Trajectory:
     new_cases_per_day: np.ndarray  # shape (n_days + 1,)
     geo_bucket_labels: tuple[str, ...] = ()
     bucket_cumulative_infected: np.ndarray | None = None  # shape (n_days + 1, n_buckets)
+    bucket_infectious_I: np.ndarray | None = None  # shape (n_days + 1, n_buckets)
 
 
 @dataclass
@@ -63,8 +64,10 @@ def simulate_trajectory(
     geo_labels, agent_bucket = geo_bucket_spec(network)
     n_geo_buckets = len(geo_labels)
     bucket_cumulative_infected: np.ndarray | None = None
+    bucket_infectious_I_arr: np.ndarray | None = None
     if n_geo_buckets:
         bucket_cumulative_infected = np.zeros((n_days + 1, n_geo_buckets), dtype=np.int32)
+        bucket_infectious_I_arr = np.zeros((n_days + 1, n_geo_buckets), dtype=np.int32)
 
     state = np.full(n_agents, STATE_S, dtype=np.int8)
     e_remaining = np.zeros(n_agents, dtype=np.int16)
@@ -96,6 +99,7 @@ def simulate_trajectory(
     daily_counts[0] = _state_counts(state)
     new_cases_per_day[0] = int(daily_counts[0, STATE_E] + daily_counts[0, STATE_I] + daily_counts[0, STATE_R] + daily_counts[0, STATE_D])
     _fill_bucket_infected(state, agent_bucket, bucket_cumulative_infected, 0)
+    _fill_bucket_infectious_I(state, agent_bucket, bucket_infectious_I_arr, 0)
 
     for day in range(1, n_days + 1):
         exposed_mask = state == STATE_E
@@ -138,6 +142,7 @@ def simulate_trajectory(
         daily_counts[day] = _state_counts(state)
         new_cases_per_day[day] = n_new_e
         _fill_bucket_infected(state, agent_bucket, bucket_cumulative_infected, day)
+        _fill_bucket_infectious_I(state, agent_bucket, bucket_infectious_I_arr, day)
 
     cumulative_cases = (
         daily_counts[:, STATE_E]
@@ -154,6 +159,7 @@ def simulate_trajectory(
         new_cases_per_day=new_cases_per_day,
         geo_bucket_labels=geo_labels,
         bucket_cumulative_infected=bucket_cumulative_infected,
+        bucket_infectious_I=bucket_infectious_I_arr,
     )
 
 
@@ -170,6 +176,21 @@ def _fill_bucket_infected(
     for b in range(n_b):
         mask = infected & (agent_bucket == b)
         bucket_cumulative_infected[day, b] = int(mask.sum())
+
+
+def _fill_bucket_infectious_I(
+    state: np.ndarray,
+    agent_bucket: np.ndarray,
+    out: np.ndarray | None,
+    day: int,
+) -> None:
+    if out is None:
+        return
+    infectious_mask = state == STATE_I
+    n_b = out.shape[1]
+    for b in range(n_b):
+        mask = infectious_mask & (agent_bucket == b)
+        out[day, b] = int(mask.sum())
 
 
 def _state_counts(state: np.ndarray) -> np.ndarray:

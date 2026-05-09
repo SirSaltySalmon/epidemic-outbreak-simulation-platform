@@ -80,7 +80,29 @@
 .version-badge.converged { border-color: var(--green-dim); color: #4caf50; }
 .version-badge.warning   { border-color: #5a4a00; color: var(--gold); }
 .version-badge.failed    { border-color: var(--red-dim); color: #e57373; }
-.btn-run-analysis {
+.clerk-user-wrap {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-shrink: 0;
+  min-height: 36px;
+}
+.btn-sign-in {
+  background: transparent;
+  border: 1px solid var(--panel-border);
+  color: var(--teal-light);
+  font-weight: 600;
+  font-size: 0.78rem;
+  padding: 6px 12px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  white-space: nowrap;
+}
+.btn-sign-in:hover {
+  border-color: var(--teal);
+  color: var(--ink);
+}
+.btn-console {
   background: var(--rust);
   color: white;
   font-weight: 700;
@@ -89,7 +111,7 @@
   white-space: nowrap;
   flex-shrink: 0;
 }
-.btn-run-analysis:hover { background: #c96a42; }
+.btn-console:hover { background: #c96a42; }
 
 /* ── Page body ── */
 .page-body {

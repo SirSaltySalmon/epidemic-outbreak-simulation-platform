@@ -54,16 +54,16 @@ export function renderScenarios(comparison, opts = {}) {
     if (s && !unavailable.has(name) && !opts.fetchError) {
       _appendInteractiveCard(container, s);
     } else {
-      _appendLockedCard(container, name, locked && !opts.fetchError ? "No simulation result yet. Run Analysis for this scenario." : null);
+      _appendLockedCard(container, name, locked && !opts.fetchError ? "No simulation result yet. Run a forecast from Console for this scenario." : null);
     }
   }
 
   const customCard = document.createElement("div");
   customCard.className = "scenario-card locked";
-  customCard.title = "Define custom intervention parameters. Requires researcher access — click Run Analysis.";
+  customCard.title = "Define custom intervention parameters. Requires researcher access — open Console.";
   customCard.innerHTML = `
     <div class="scenario-name" style="color:#2e4a47">+ Custom Scenario</div>
-    <div class="scenario-desc" style="color:#2e4a47">Click ⚗ Run Analysis to define custom parameters.</div>
+    <div class="scenario-desc" style="color:#2e4a47">Open Console (signed in) to define custom parameters.</div>
   `;
   container.appendChild(customCard);
 }

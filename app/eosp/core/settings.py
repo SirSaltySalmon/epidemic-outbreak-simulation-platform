@@ -26,6 +26,14 @@ class Settings(BaseSettings):
     geo_risk_model: str = "legacy"
     # Deprecated product surface: stochastic metapop kernel (keep for regression / research only).
     metapop_enabled: bool = False
+    # Clerk (https://clerk.com): set both to require signed-in sessions for researcher APIs + Console UI.
+    clerk_publishable_key: str | None = None
+    clerk_frontend_api: str | None = None
+    # Secret key: lets the API read ``public_metadata`` via Clerk Backend API when the session JWT
+    # does not embed metadata (Clerk default session tokens omit ``public_metadata``).
+    clerk_secret_key: str | None = None
+    # Required on direct HTTP calls to api.clerk.com (see Clerk versioning docs).
+    clerk_backend_api_version: str = "2025-04-10"
 
     model_config = SettingsConfigDict(env_file=".env", env_prefix="EOSP_", extra="ignore")
 

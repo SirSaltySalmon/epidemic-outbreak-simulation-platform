@@ -14,11 +14,16 @@ let _mapLegendEl = null;
 
 /** Metapop kernel uses infectious medians; legacy uses OpenSky ring scores. */
 const METAPOP_RISK_SOURCE = "metapop_monte_carlo";
+const ABM_GEO_RISK_SOURCE = "abm_geo_forecast";
 /** Max click-to-popup markers for metapop (full graph has 1000+ airports). */
 const METAPOP_POPUP_MARKER_CAP = 120;
 
 function _isMetapopKernel(data) {
   return (data.metadata && data.metadata.risk_source) === METAPOP_RISK_SOURCE;
+}
+
+function _isAbmGeoKernel(data) {
+  return data.metadata?.risk_source === ABM_GEO_RISK_SOURCE;
 }
 
 export function initMap(containerId) {
@@ -100,33 +105,40 @@ export function renderGeoData(data, geoForecast) {
     _arcLines.push(line);
   }
 
-  // Risk heatmap (intensity 0–1 for leaflet.heat; metapop raw counts are normalized)
+  // Risk heatmap (intensity 0–1 for leaflet.heat; count kernels are normalized)
   const isMetapop = _isMetapopKernel(data);
+  const isAbmGeo = _isAbmGeoKernel(data);
+  const isCountKernel = isMetapop || isAbmGeo;
   const scores = data.risk_heatmap.map((z) => Number(z.risk_score) || 0);
   const maxScore = Math.max(...scores, 1e-12);
   const heatPoints = data.risk_heatmap.map((z) => {
     const raw = Number(z.risk_score) || 0;
-    const w = isMetapop ? Math.sqrt(raw / maxScore) : raw;
+    const w = isCountKernel ? Math.sqrt(raw / maxScore) : raw;
     return [z.lat, z.lng, w];
   });
   _heatLayer = L.heatLayer(heatPoints, {
-    radius: isMetapop ? 22 : 30,
-    blur: isMetapop ? 16 : 20,
+    radius: isCountKernel ? 22 : 30,
+    blur: isCountKernel ? 16 : 20,
     max: 1.0,
     maxZoom: 6,
     gradient: { 0.2: "#d89c22", 0.5: "#b95b35", 0.8: "#8b0000", 1.0: "#ff0000" },
   }).addTo(_map);
 
   // Popup targets for heat airports (transparent markers)
-  if (isMetapop) {
+  if (isCountKernel) {
     const ranked = [...data.risk_heatmap]
       .filter((z) => (Number(z.risk_score) || 0) > 0)
       .sort((a, b) => (Number(b.risk_score) || 0) - (Number(a.risk_score) || 0));
-    const top = ranked.slice(0, METAPOP_POPUP_MARKER_CAP);
+    const top = isMetapop ? ranked.slice(0, METAPOP_POPUP_MARKER_CAP) : ranked;
     for (const z of top) {
       const raw = Number(z.risk_score) || 0;
       const label = z.city ? `${z.city} (${z.airport_iata})` : z.airport_iata;
       const countryLine = z.country ? `${z.country}<br>` : "";
+      const layerCopy = isMetapop
+        ? `Metapop layer: median <strong>infectious (I)</strong> on last sim day ≈ <strong>${raw.toFixed(2)}</strong> (ensemble).<br>` +
+          `<em>Scheduled-connectivity proxy — not reported case counts.</em>`
+        : `ABM geo heat: median <strong>infectious (I)</strong> on final forecast day ≈ <strong>${raw.toFixed(2)}</strong>.<br>` +
+          `<em>Forecast bucket median — not OpenSky ring scores.</em>`;
       const m = L.circleMarker([z.lat, z.lng], {
         radius: 8,
         fillColor: "transparent",
@@ -135,8 +147,7 @@ export function renderGeoData(data, geoForecast) {
       }).bindPopup(
         `<strong>${label}</strong><br>` +
         `${countryLine}` +
-        `Metapop layer: median <strong>infectious (I)</strong> on last sim day ≈ <strong>${raw.toFixed(2)}</strong> (ensemble).<br>` +
-        `<em>Scheduled-connectivity proxy — not reported case counts.</em>`
+        layerCopy
       ).addTo(_map);
       _riskPopupMarkers.push(m);
     }
@@ -217,11 +228,14 @@ function _updateMapLegend(data, geoForecast) {
   const metapopHint = _isMetapopKernel(data)
     ? ` Popups on the top ${METAPOP_POPUP_MARKER_CAP} airports by median I (zoom heat for the rest).`
     : "";
+  const abmGeoHint = _isAbmGeoKernel(data)
+    ? " Orange heat is ABM infectious median on the final forecast day."
+    : "";
   const abmNote = geoForecast
     ? "Green circles: ABM median cumulative infected (E+I+R+D) at destination clusters, day 14 — width scales to the busiest cluster in this run."
     : "Green circles appear after a full forecast run caches geo bucket outputs.";
   _mapLegendEl.innerHTML =
-    `<strong>Map layers</strong> — ${heatNote}${metapopHint} <strong>|</strong> ${abmNote}`;
+    `<strong>Map layers</strong> — ${heatNote}${metapopHint}${abmGeoHint} <strong>|</strong> ${abmNote}`;
 }
 
 /** Build ~20 intermediate points along a great-circle-ish curve */

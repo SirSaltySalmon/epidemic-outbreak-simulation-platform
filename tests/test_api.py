@@ -77,6 +77,22 @@ def test_geo_outbreak_metapop_disabled_coerces_to_legacy():
     assert "OpenSky" in md.get("risk_heatmap_explanation", "")
 
 
+def test_geo_outbreak_abm_geo_fallback_without_cached_forecast():
+    r = client.get("/api/v1/geo/outbreak?risk_model=abm_geo")
+    assert r.status_code == 200
+    metadata = r.json()["metadata"]
+    assert metadata.get("abm_geo_fallback_reason") or metadata.get("risk_source") == "legacy_opensky_fallback"
+
+
+def test_geo_outbreak_abm_geo_uses_forecast_when_cached():
+    _run_forecasts("baseline")
+    r = client.get("/api/v1/geo/outbreak?risk_model=abm_geo")
+    assert r.status_code == 200
+    payload = r.json()
+    assert payload["metadata"].get("risk_source") == "abm_geo_forecast"
+    assert payload["risk_heatmap"]
+
+
 def test_geo_outbreak_metapop_includes_sidecar_metadata(tmp_path):
     from eosp.core.seed_data import CASES
     from eosp.services.geo import build_outbreak_geo

@@ -84,10 +84,9 @@ def geo_outbreak(
     http_response.headers["Cache-Control"] = "no-store"
     settings = get_settings()
     effective_risk = risk_model if risk_model is not None else settings.geo_risk_model
-    if (effective_risk or "").lower() not in ("legacy", "metapop"):
+    effective_risk = (effective_risk or "").lower()
+    if effective_risk not in ("legacy", "metapop", "abm_geo"):
         effective_risk = "legacy"
-    else:
-        effective_risk = effective_risk.lower()
     if effective_risk == "metapop" and not settings.metapop_enabled:
         effective_risk = "legacy"
     repo = request.app.state.repository
@@ -110,12 +109,22 @@ def geo_outbreak(
         cached = repo.get_geo_outbreak_cache(inference_version, metapop_runs=metapop_runs)
         if cached is not None:
             return cached
+    if effective_risk == "abm_geo":
+        try:
+            inference = repo.latest_inference()
+            fc = get_cached_forecast("baseline", repository=repo, inference=inference)
+            abm_geo_forecast = fc.metadata.get("geo_forecast") if fc else None
+        except (LookupError, ForecastNotCachedError):
+            abm_geo_forecast = None
+    else:
+        abm_geo_forecast = None
     cases = repo.list_cases()
     return build_outbreak_geo(
         p_transmit=p_transmit,
         cases=cases,
         risk_model=effective_risk,
         metapop_n_runs=metapop_runs,
+        abm_geo_forecast=abm_geo_forecast,
     )
 
 

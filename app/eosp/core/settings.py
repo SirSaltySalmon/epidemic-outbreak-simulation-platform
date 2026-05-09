@@ -22,7 +22,7 @@ class Settings(BaseSettings):
     who_don_llm_base_url: str = "https://api.openai.com/v1"
     who_don_llm_model: str = "gpt-4o-mini"
     who_don_llm_timeout_seconds: int = 60
-    # Maps API default for GET /geo/outbreak when ``risk_model`` query is omitted.
+    # Maps API default for GET /geo/outbreak; allowed: legacy, metapop (if enabled), abm_geo.
     geo_risk_model: str = "legacy"
     # Deprecated product surface: stochastic metapop kernel (keep for regression / research only).
     metapop_enabled: bool = False

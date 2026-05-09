@@ -4,6 +4,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 DRAWER_JS = ROOT / "app" / "eosp" / "static" / "js" / "drawer.js"
 DRAWER_CSS = ROOT / "app" / "eosp" / "static" / "css" / "drawer.css"
+API_JS = ROOT / "app" / "eosp" / "static" / "js" / "api.js"
+MAIN_JS = ROOT / "app" / "eosp" / "static" / "js" / "main.js"
 
 
 def test_stage_cards_do_not_capture_initial_state_for_toggle():
@@ -51,3 +53,14 @@ def test_stage_body_can_scroll_large_pipeline_details():
     assert ".stage-body" in source
     assert "overflow-y: auto" in source
     assert "max-height:" in source
+
+
+def test_console_case_refresh_bypasses_public_get_cache_after_mutations():
+    api_source = API_JS.read_text(encoding="utf-8")
+    drawer_source = DRAWER_JS.read_text(encoding="utf-8")
+    main_source = MAIN_JS.read_text(encoding="utf-8")
+
+    assert "export async function get(path, options = {})" in api_source
+    assert "cache: options.cache || \"default\"" in api_source
+    assert 'get("/cases", { cache: "no-store" })' in drawer_source
+    assert 'get(_DASHBOARD_BOOTSTRAP, { cache: "no-store" })' in main_source

@@ -354,7 +354,7 @@ async function _manageCasesSection(onRunComplete) {
   holder.className = "manage-cases-inner";
   holder.innerHTML = `<p class="case-intake-hint">Loading cases…</p>`;
   try {
-    const rows = await get("/cases");
+    const rows = await get("/cases", { cache: "no-store" });
     holder.innerHTML = "";
     if (!Array.isArray(rows) || rows.length === 0) {
       holder.innerHTML = `<p class="case-intake-hint">No cases in the current dataset.</p>`;

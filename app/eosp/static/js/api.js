@@ -37,10 +37,11 @@ function _detailMessage(detail) {
   return String(detail);
 }
 
-export async function get(path) {
+export async function get(path, options = {}) {
   const res = await fetch(BASE + path, {
     headers: await authHeaders(),
     credentials: "include",
+    cache: options.cache || "default",
   });
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));

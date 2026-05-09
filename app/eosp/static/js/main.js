@@ -83,7 +83,7 @@ function _applyDashboardBundle(data) {
 }
 
 function _onRunComplete() {
-  get(_DASHBOARD_BOOTSTRAP)
+  get(_DASHBOARD_BOOTSTRAP, { cache: "no-store" })
     .then((data) => {
       if (data.summary) {
         _applySummaryKpis(data.summary);

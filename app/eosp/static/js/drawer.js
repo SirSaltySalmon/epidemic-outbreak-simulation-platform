@@ -588,10 +588,6 @@ function _handleEvent(event) {
   } else if (event.stage === "simulation") {
     _updateStage(2, "done", _getStageData(2));
     _updateStage(3, event.status === "complete" ? "done" : "active", event);
-  } else if (event.stage === "metapop_geo") {
-    const st = event.status === "running" ? "active" : "done";
-    _updateStage(2, "done", _getStageData(2));
-    _updateStage(3, st, { ..._getStageData(3), metapop_geo: event });
   }
 }
 
@@ -768,31 +764,6 @@ function _stageDetailHtml(n, state, data) {
     const done = data.trajectories ?? 0;
     const total = data.total ?? 10000;
     const pct = Math.round((done / total) * 100);
-    const mg = data.metapop_geo;
-    const mTot = mg ? mg.total_runs ?? mg.metapop_n_runs ?? 0 : 0;
-    const mDone = mg
-      ? mg.runs_completed ?? (mg.status === "complete" ? mTot : 0)
-      : 0;
-    const mPct = mTot > 0 ? Math.round((mDone / mTot) * 100) : 0;
-    let metapopBlock = "";
-    if (mg && mg.status === "running" && mTot > 0) {
-      metapopBlock = `
-          <div style="margin-top:0.55rem;padding-top:0.45rem;border-top:1px solid #1e3530">
-            <div style="color:var(--teal-light);font-size:0.78rem;margin-bottom:0.35rem">
-              Metapop map kernel · <strong>${mDone.toLocaleString()}</strong> / ${mTot.toLocaleString()} runs (${mPct}%)
-              ${mg.elapsed_s != null ? ` · ${mg.elapsed_s}s elapsed` : ""}
-            </div>
-            <div class="progress-bar"><div class="progress-fill" style="width:${mPct}%"></div></div>
-          </div>`;
-    } else if (mg && (mg.status === "complete" || mg.status === "failed" || mg.metapop_n_runs != null)) {
-      metapopBlock = `<div style="color:var(--teal-light);font-size:0.78rem;margin-top:0.45rem">
-            Metapop map kernel:
-            <strong>${mg.status === "complete" ? "complete" : mg.status === "failed" ? "failed" : mg.status || "—"}</strong>
-            ${mg.metapop_n_runs != null ? ` · ${mg.metapop_n_runs} runs` : mTot ? ` · ${mTot} runs` : ""}
-            ${mg.p_transmit_used != null ? ` · p_transmit ${mg.p_transmit_used}` : ""}
-            ${mg.error ? `<br/><span style="color:var(--warn-amber,#c9a227)">${String(mg.error).replace(/</g, "")}</span>` : ""}
-          </div>`;
-    }
     return `
       <div class="stat-row">
         <div class="stat-box"><div class="stat-lbl">Trajectories</div><div class="stat-val">${done.toLocaleString()}</div><div class="stat-sub">/ ${total.toLocaleString()}</div></div>
@@ -803,7 +774,6 @@ function _stageDetailHtml(n, state, data) {
       <div class="progress-eta" style="color:var(--ink-muted);font-size:0.78rem">${
         _simEtaLine(data) || "Estimating time…"
       }</div>
-      ${metapopBlock}
       <div id="fan-chart-${Date.now()}"></div>
     `;
   }
@@ -822,13 +792,6 @@ function _doneSummary(n, data) {
   if (n === 2) return `Inference complete · R̂ ${data.rhat_max != null ? Number(data.rhat_max).toFixed(3) : "?"} · ${data.divergences ?? "?"} divergences`;
   if (n === 3) {
     const base = `Simulation complete · ${(data.total || data.trajectories || "10,000").toLocaleString()} trajectories`;
-    const mg = data.metapop_geo;
-    if (mg && mg.status === "complete") {
-      return `${base} · metapop geo ${mg.metapop_n_runs ?? "?"} runs`;
-    }
-    if (mg && mg.status === "failed") {
-      return `${base} · metapop geo failed`;
-    }
     return base;
   }
   if (n === 4) return "Forecast saved and dashboard updated.";

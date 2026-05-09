@@ -1,0 +1,20 @@
+{
+  "schema_version": 1,
+  "description": "Routing priors for hub contact-cohort ABM. Ship block is UI/narrative only—not used for agent counts.",
+  "domestic_continuation_bias": 0.4,
+  "contact_cohort_only": true,
+  "ship": {
+    "name": "MV Hondius",
+    "n_passengers": 117,
+    "n_crew": 30
+  },
+  "ui": {
+    "lat": 20.5,
+    "lng": -21.0,
+    "status": "en_route_tenerife"
+  },
+  "gateway_pseudocount": 0.5,
+  "gateway_allowlist": null,
+  "rng_seed": 20260507,
+  "synthetic_susceptibles_base": 24
+}

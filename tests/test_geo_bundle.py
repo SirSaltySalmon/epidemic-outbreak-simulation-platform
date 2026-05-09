@@ -29,7 +29,6 @@ def test_geo_bundle_schema_version():
     b = build_geo_bundle(
         p_transmit=0.1,
         cases=list(CASES),
-        risk_model="abm_geo",
         abm_geo_forecast=_minimal_abm_forecast(),
         inference_version="v-test",
         forecast_n_simulations=100,
@@ -42,7 +41,6 @@ def test_geo_bundle_primary_layer_references_valid_id():
     b = build_geo_bundle(
         p_transmit=0.1,
         cases=list(CASES),
-        risk_model="abm_geo",
         abm_geo_forecast=_minimal_abm_forecast(),
     )
     pid = b["simulation"]["primary_layer_id"]
@@ -54,7 +52,6 @@ def test_geo_bundle_cumulative_metric_is_never_blank():
     b = build_geo_bundle(
         p_transmit=0.1,
         cases=list(CASES),
-        risk_model="abm_geo",
         abm_geo_forecast=_minimal_abm_forecast(),
     )
     primary = next(
@@ -69,7 +66,6 @@ def test_geo_bundle_peak_infectious_I_present():
     b = build_geo_bundle(
         p_transmit=0.1,
         cases=list(CASES),
-        risk_model="abm_geo",
         abm_geo_forecast=_minimal_abm_forecast(),
     )
     peak_layer = next(layer for layer in b["simulation"]["layers"] if layer["id"] == "peak_infectious_I_median")
@@ -82,7 +78,6 @@ def test_legacy_endpoint_compat():
     b = build_geo_bundle(
         p_transmit=0.1,
         cases=list(CASES),
-        risk_model="abm_geo",
         abm_geo_forecast=_minimal_abm_forecast(),
     )
     legacy = outbreak_dict_from_geo_bundle(b)
@@ -91,13 +86,11 @@ def test_legacy_endpoint_compat():
         assert key in row
 
 
-def test_geo_bundle_fallback_produces_errors_array():
+def test_geo_bundle_missing_forecast_produces_errors_array():
     b = build_geo_bundle(
         p_transmit=0.1,
         cases=list(CASES),
-        risk_model="abm_geo",
         abm_geo_forecast=None,
-        legacy_opensky_geo=None,
     )
     assert b["errors"]
     assert b["errors"][0].get("code") == "abm_geo_unavailable"

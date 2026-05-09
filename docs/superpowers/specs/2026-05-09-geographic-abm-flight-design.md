@@ -54,19 +54,18 @@ Entities may attach to the aviation graph **only** through gateways tied to regi
 | South Africa — Johannesburg | Primary hub IATA (**JNB**) — authoritative list may add alternates via config |
 | Qatar | Typically **DOH** |
 | Switzerland | One or more IATAs (**ZRH**, **GVA**, …) fixed in config tie-map |
-| Saint Helena & surrounding islands | Operational IATA set (e.g. **HLE** and explicit “surrounding” entries) pinned in config — **never** guessed at runtime |
 | Netherlands | Typically **AMS** |
 
-**Rule:** Entities do not spontaneously appear at unrelated international airports solely from seed logic unless spawned by a separate **explicit non-ship** generator (future scope).
+**Rule:** Entities do not spontaneously appear at unrelated international airports solely from seed logic unless spawned by a separate **explicit** generator (future scope).
 
 ### 2.3 Case-informed gateway weights (**c**)
 
 1. **Match** ingested **`CaseRecord`** rows to gateways via:
    - **Airport-first:** `location_airport_code` ∈ gateway IATA allowlist ⇒ count bucket.
-   - **Country-second:** normalized `location_country` maps to gateway via config table for **CH / NL / ZA / QA / SH-StHelena-group** (ambiguous countries use explicit **tier order** documented in config defaults).
+   - **Country-second:** normalized `location_country` maps to gateway via config table for **CH / NL / ZA / QA** (ambiguous countries use explicit **tier order** documented in config defaults).
 2. **Normalize** to non-negative categorical weights (**optional pseudocount** / Laplace smoothing TBD — default small ε to prevent lockout when counts are sparse).
 3. **Per entity:** draw gateway from **categorical RNG** proportional to weights (seed-stable ensembles).
-4. **Sparse ingest:** If no matches or degenerate totals → fallback to **scenario default fractions** (same five-region allowlist; **sum to 1**), researcher-editable without expanding geography.
+4. **Sparse ingest:** If no matches or degenerate totals → fallback to **scenario default fractions** (same hub allowlist; **sum to 1**), researcher-editable without expanding geography.
 
 ---
 
@@ -85,8 +84,6 @@ Optional enrichment: coarse **equipment / capacity ordinal** — not mandatory v
 | **Hot** | Latest successful pull satisfies configured max age for hubs in play |
 | **Warm** | Using last-complete hub snapshot older than Hot SLA |
 | **Cold** | Older daily / frozen surrogate — permissible only with explicit degraded flag surfaced to UI/metadata |
-
-Saint Helena gateways may disproportionately reside in Warm/Cold; this is acceptable but **never silent**.
 
 ### 3.3 **Persistent snapshots (mandatory)**
 
@@ -255,7 +252,6 @@ Manual / exploratory checklist each release candidate:
 | Check | PASS criteria |
 |-------|---------------|
 | Cold tier surfacing | UI badge + structured log |
-| Thin Saint Helena corridor | Explanation string + optional strict-block |
 | Replay job | bitwise equality for aggregate counts given fixed seeds |
 
 ---
@@ -293,10 +289,6 @@ Finalize global default: **`strict_abort_missing_hub`** versus **`continue_expli
 ### O-2 Pseudocount for degenerate ingest
 
 Pick **small ε Laplace smoothing** magnitude + max cap so one stray record cannot dominate prematurely.
-
-### O-3 Saint Helena authoritative IATA set
-
-External ops source-of-truth enumerated — placeholder **SH cluster** wording here until pasted from operations brief.
 
 ---
 

@@ -124,6 +124,34 @@ class QualityAlertRow(Base):
     recommended_action: Mapped[str] = mapped_column(String(500))
 
 
+class FlightSnapshotRow(Base):
+    __tablename__ = "flight_snapshots"
+
+    snapshot_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    provider_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    query_fingerprint: Mapped[str] = mapped_column(String(128), nullable=False)
+    fetched_at_utc: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    horizon_start_date: Mapped[date] = mapped_column(Date, nullable=False)
+    horizon_end_date: Mapped[date] = mapped_column(Date, nullable=False)
+    status: Mapped[str] = mapped_column(String(32), nullable=False)
+
+
+class FlightLegRow(Base):
+    __tablename__ = "flight_legs"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    snapshot_id: Mapped[str] = mapped_column(ForeignKey("flight_snapshots.snapshot_id"), index=True)
+    origin_iata: Mapped[str] = mapped_column(String(8), nullable=False)
+    destination_iata: Mapped[str] = mapped_column(String(8), nullable=False)
+    scheduled_departure_utc: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    scheduled_arrival_utc: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    provider_record_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    equipment_code: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    capacity_ordinal: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    leg_status: Mapped[str] = mapped_column(String(32), nullable=False, default="active")
+    supersedes_leg_id: Mapped[int | None] = mapped_column(ForeignKey("flight_legs.id"), nullable=True)
+
+
 class ExternalFeedStateRow(Base):
     """Last-known fingerprint for polled external sources (e.g. WHO DON hub + per-item).
 

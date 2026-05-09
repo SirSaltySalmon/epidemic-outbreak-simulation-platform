@@ -1,6 +1,3 @@
-from pathlib import Path
-from shutil import copyfile
-
 from fastapi.testclient import TestClient
 import pytest
 
@@ -14,15 +11,6 @@ from eosp.services.forecast import _FORECAST_CACHE
 
 
 client = TestClient(app)
-
-
-@pytest.fixture
-def enable_metapop(monkeypatch):
-    monkeypatch.setenv("EOSP_METAPOP_ENABLED", "true")
-    get_settings.cache_clear()
-    yield
-    monkeypatch.delenv("EOSP_METAPOP_ENABLED", raising=False)
-    get_settings.cache_clear()
 
 
 def _clear_forecast_cache_everywhere() -> None:
@@ -240,29 +228,14 @@ def test_console_access_allows_patch_via_clerk_api_when_jwt_omits_metadata(monke
         app.dependency_overrides[require_clerk_session] = lambda: None
 
 
-def test_geo_outbreak_metapop_risk_source(enable_metapop):
-    r = client.get("/api/v1/geo/outbreak?risk_model=metapop&metapop_runs=8")
-    assert r.status_code == 200
-    assert r.json()["metadata"].get("risk_source") == "metapop_monte_carlo"
-
-
-def test_geo_outbreak_metapop_disabled_coerces_to_legacy():
-    """EOSP_METAPOP_ENABLED defaults false — metapop product surface is deprecated."""
-    r = client.get("/api/v1/geo/outbreak?risk_model=metapop")
+def test_geo_outbreak_without_cached_forecast_shows_pending_layer():
+    r = client.get("/api/v1/geo/outbreak")
     assert r.status_code == 200
     md = r.json()["metadata"]
-    assert md.get("risk_source") != "metapop_monte_carlo"
-    assert "OpenSky" in md.get("risk_heatmap_explanation", "")
+    assert md.get("risk_source") == "abm_geo_unavailable"
 
 
-def test_geo_outbreak_abm_geo_fallback_without_cached_forecast():
-    r = client.get("/api/v1/geo/outbreak?risk_model=abm_geo")
-    assert r.status_code == 200
-    metadata = r.json()["metadata"]
-    assert metadata.get("abm_geo_fallback_reason") or metadata.get("risk_source") == "legacy_opensky_fallback"
-
-
-def test_geo_outbreak_abm_geo_uses_forecast_when_cached():
+def test_geo_outbreak_uses_forecast_when_cached():
     _run_forecasts("baseline")
     r = client.get("/api/v1/geo/outbreak?risk_model=abm_geo")
     assert r.status_code == 200
@@ -272,63 +245,11 @@ def test_geo_outbreak_abm_geo_uses_forecast_when_cached():
 
 
 def test_geo_bundle_endpoint_returns_schema_version():
-    r = client.get("/api/v1/geo/bundle?risk_model=abm_geo")
+    r = client.get("/api/v1/geo/bundle")
     assert r.status_code == 200
     data = r.json()
     assert data.get("schema_version") == "1"
     assert "simulation" in data and "layers" in data["simulation"]
-
-
-def test_geo_outbreak_metapop_includes_sidecar_metadata(tmp_path):
-    from eosp.core.seed_data import CASES
-    from eosp.services.geo import build_outbreak_geo
-
-    data_dir = Path(__file__).resolve().parents[1] / "app" / "eosp" / "data"
-    mob = tmp_path / "mobility_minimal.json"
-    copyfile(data_dir / "mobility_weekly_skeleton.json", mob)
-    copyfile(
-        Path(__file__).resolve().parent / "fixtures" / "mobility_minimal.meta.json",
-        tmp_path / "mobility_minimal.meta.json",
-    )
-
-    out = build_outbreak_geo(
-        p_transmit=0.1,
-        cases=list(CASES),
-        risk_model="metapop",
-        metapop_n_runs=4,
-        metapop_mobility_path=mob,
-    )
-    md = out["metadata"]
-    assert md["risk_source"] == "metapop_monte_carlo"
-    assert md["mobility_bundle_version"] == "mobility_minimal.json"
-    assert md["mobility_horizon_days"] == 14
-    assert md["mobility_source"] == "fixture OpenFlights"
-    assert md["mobility_license_note"] == "Test fixture only."
-
-
-def test_geo_outbreak_metapop_serves_run_snapshot_cache_when_current(monkeypatch, enable_metapop):
-    repo = app.state.repository
-    inf = repo.latest_inference()
-    repo.cache_geo_outbreak(
-        inf.version,
-        {
-            "ship": {"lat": 1, "lng": 2, "name": "Test", "status": "x"},
-            "confirmed_cases": [],
-            "evacuation_flights": [],
-            "risk_heatmap": [{"airport_iata": "TST", "lat": 0, "lng": 0, "risk_score": 3.14}],
-            "metadata": {"risk_source": "metapop_monte_carlo", "metapop_n_runs": 8},
-        },
-    )
-
-    def boom(**kwargs):
-        raise AssertionError("build_outbreak_geo should not run when snapshot matches")
-
-    monkeypatch.setattr("eosp.api.routes.build_outbreak_geo", boom)
-    r = client.get("/api/v1/geo/outbreak?risk_model=metapop")
-    assert r.status_code == 200
-    data = r.json()
-    assert data["risk_heatmap"][0]["airport_iata"] == "TST"
-    assert data["metadata"]["metapop_n_runs"] == 8
 
 
 def test_reference_countries_returns_sorted_codes():
@@ -394,22 +315,18 @@ def test_case_summary_matches_seed_outbreak():
     assert "external_feed_last_checked_at" in payload
 
 
-def test_baseline_forecast_stores_legacy_opensky_geo_snapshot():
+def test_baseline_forecast_has_geo_forecast_not_opensky_snapshot():
     _run_forecasts("baseline")
     payload = client.get("/api/v1/forecasts/baseline").json()
-    snap = payload["metadata"].get("legacy_opensky_geo")
-    assert isinstance(snap, dict)
-    assert "risk_heatmap" in snap and "metadata" in snap
-    assert isinstance(snap["risk_heatmap"], list)
+    assert "legacy_opensky_geo" not in payload["metadata"]
+    geo = payload["metadata"].get("geo_forecast") or {}
+    assert geo.get("metric") == "cumulative_infected"
 
 
-def test_geo_legacy_uses_cached_rings_after_baseline_run():
+def test_geo_after_baseline_run_uses_abm_kernel():
     _run_forecasts("baseline")
     geo = client.get("/api/v1/geo/outbreak?risk_model=legacy").json()
-    assert geo["metadata"].get("risk_source") in (
-        "legacy_opensky_cached_simulation",
-        "legacy_opensky_live_simulation",
-    )
+    assert geo["metadata"].get("risk_source") == "abm_geo_forecast"
 
 
 def test_forecast_includes_credible_intervals():
@@ -442,10 +359,12 @@ def test_forecast_metadata_geo_buckets_from_abm():
     assert response.status_code == 200
     geo = response.json()["metadata"].get("geo_forecast") or {}
     assert geo.get("metric") == "cumulative_infected"
-    assert "ship" in (geo.get("bucket_order") or [])
+    order = geo.get("bucket_order") or []
+    hubs = {"JNB", "DOH", "ZRH", "AMS"}
+    assert any(str(b).upper() in hubs for b in order)
     assert len(geo.get("by_day") or []) == 14
     last = geo["by_day"][-1]
-    assert "buckets" in last and "ship" in last["buckets"]
+    assert "buckets" in last and any(str(k).upper() in hubs for k in (last["buckets"] or {}))
 
 
 def test_scenario_comparison_reports_baseline_delta():
@@ -521,8 +440,8 @@ def test_create_case_persists_and_returns_validation():
             "symptom_onset_date": "2026-05-01",
             "hospitalization_date": "2026-05-03",
             "death_date": None,
-            "location_country": "ES",
-            "location_airport_code": "TFN",
+            "location_country": "QA",
+            "location_airport_code": "DOH",
             "confirmed_or_suspected": "suspected",
             "lab_test_result": "not_tested",
             "contacts": [{"id": "anon_p0008", "type": "social"}],

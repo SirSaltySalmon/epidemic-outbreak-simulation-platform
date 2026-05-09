@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 from functools import lru_cache
 from pathlib import Path
+from typing import Any
 
 _DATA_DIR = Path(__file__).resolve().parents[1] / "data"
 
@@ -13,6 +14,12 @@ _DATA_DIR = Path(__file__).resolve().parents[1] / "data"
 def _airport_coords() -> dict:
     with open(_DATA_DIR / "airport_coords.json", encoding="utf-8") as f:
         return json.load(f)
+
+
+def load_airport_coords() -> dict[str, dict[str, Any]]:
+    """Bundled IATA → {lat, lng, city, country} (shallow copy; safe to mutate values if needed)."""
+
+    return dict(_airport_coords())
 
 
 @lru_cache

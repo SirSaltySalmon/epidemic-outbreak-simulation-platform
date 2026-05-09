@@ -22,10 +22,8 @@ class Settings(BaseSettings):
     who_don_llm_base_url: str = "https://api.openai.com/v1"
     who_don_llm_model: str = "gpt-4o-mini"
     who_don_llm_timeout_seconds: int = 60
-    # Maps API default for GET /geo/outbreak; allowed: legacy, metapop (if enabled), abm_geo.
-    geo_risk_model: str = "legacy"
-    # Deprecated product surface: stochastic metapop kernel (keep for regression / research only).
-    metapop_enabled: bool = False
+    # Maps API default when ``risk_model`` query is omitted (ignored at runtime; geo always uses abm_geo_forecast).
+    geo_risk_model: str = "abm_geo"
     # Clerk (https://clerk.com): set both to require signed-in sessions for researcher APIs + Console UI.
     clerk_publishable_key: str | None = None
     clerk_frontend_api: str | None = None

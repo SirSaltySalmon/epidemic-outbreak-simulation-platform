@@ -1,18 +1,16 @@
 """Geographic / epidemiological buckets for ABM map overlays (FR-3 export).
 
-**Buckets**
-  - ``ship``: agents with ``node_metadata["ship_member"] is True`` (passengers + crew).
-  - One bucket per distinct ``destination`` code on off-ship agents (e.g. ``ZA_JNB``,
-    ``NL_AMS``), aligned with ``network_spec.json`` destination clusters.
+**Track B (itinerary)**  
+  When :class:`~eosp.services.network.ContactNetwork` carries
+  ``itinerary_bucket_labels`` + ``itinerary_contact_patch``, buckets are **patches**
+  (e.g. hub IATAs) encountered in the hub–OpenFlights world.
+
+**Legacy (metadata destination)**  
+  Otherwise: ``ship`` plus one bucket per distinct ``destination`` on off-ship agents.
 
 **Map metric (cumulative infected in bucket)**  
-  Per simulation day, count agents in the bucket whose SEIRD state is one of
-  **E, I, R, or D** (i.e. not susceptible). This matches fleet-level
-  ``cumulative_cases`` semantics scoped to the bucket.
-
-**Not covered**  
-  Second-hop airports and global rings use :mod:`eosp.services.risk_propagation`
-  (OpenSky heuristic), not particle positions in the ABM graph.
+  Per simulation day, count agents whose epidemiological state is one of
+  **E, P, I, H, R, or D** (not susceptible), scoped to the bucket for that day.
 """
 
 from __future__ import annotations
@@ -23,22 +21,28 @@ from eosp.services.network import ContactNetwork
 
 GEO_BUCKET_METRIC_ID = "cumulative_infected"
 GEO_BUCKET_METRIC_DETAIL = (
-    "Agents in the bucket in states E, I, R, or D (everyone no longer susceptible)."
+    "Agents in the bucket in states E, P, I, H, R, or D (everyone no longer susceptible)."
 )
 
 GEO_BUCKET_METRIC_INFECTIOUS_I_ID = "infectious_present"
 GEO_BUCKET_METRIC_INFECTIOUS_I_DETAIL = (
-    "Agents in the bucket in state I (infectious) only."
+    "Agents in the bucket in presymptomatic (P) or symptomatic infectious (I) states."
 )
 
 GEO_BUCKET_METRIC_PEAK_INFECTIOUS_I_ID = "peak_infectious_I"
 GEO_BUCKET_METRIC_PEAK_INFECTIOUS_I_DETAIL = (
-    "Peak concurrent infectious (I) count in the bucket on the simulation day with maximum total I."
+    "Peak concurrent P+I (transmitting) count in the bucket on the simulation day with maximum total P+I."
 )
 
 
 def geo_bucket_spec(network: ContactNetwork) -> tuple[tuple[str, ...], np.ndarray]:
     """Return ``(labels, agent_bucket)`` with ``agent_bucket[i]`` in ``0..len(labels)-1``."""
+
+    if network.itinerary_bucket_labels and network.itinerary_contact_patch is not None:
+        labels = network.itinerary_bucket_labels
+        arr = network.itinerary_contact_patch
+        col0 = arr[:, 0] if arr.shape[1] else np.zeros(len(network.node_metadata), dtype=np.int32)
+        return labels, col0.astype(np.int32, copy=False)
 
     metas = network.node_metadata
     n_agents = len(metas)

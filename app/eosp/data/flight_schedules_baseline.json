@@ -1,0 +1,48 @@
+{
+  "schema_version": 1,
+  "bundle_date": "2026-05-09",
+  "provider_id": "baseline_static",
+  "description": "Four hub contact cohort (placeholder 20 agents per hub until published counts). OpenFlights onward moves use routes.dat at runtime.",
+  "horizon_start_date": "2026-05-07",
+  "horizon_end_date": "2026-05-21",
+  "rng_seed": 20260507,
+  "flights": [
+    {
+      "key": "hub_johannesburg",
+      "depart_day": 1,
+      "origin_iata": "JNB",
+      "destination_code": "ZA_JNB",
+      "n_passengers": 20,
+      "edge_weight": 0.55,
+      "neighbour_radius": 3
+    },
+    {
+      "key": "hub_doha",
+      "depart_day": 1,
+      "origin_iata": "DOH",
+      "destination_code": "QA_DOH",
+      "n_passengers": 20,
+      "edge_weight": 0.55,
+      "neighbour_radius": 3
+    },
+    {
+      "key": "hub_zurich",
+      "depart_day": 1,
+      "origin_iata": "ZRH",
+      "destination_code": "CH_ZRH",
+      "n_passengers": 20,
+      "edge_weight": 0.55,
+      "neighbour_radius": 3
+    },
+    {
+      "key": "hub_amsterdam",
+      "depart_day": 1,
+      "origin_iata": "AMS",
+      "destination_code": "NL_AMS",
+      "n_passengers": 20,
+      "edge_weight": 0.55,
+      "neighbour_radius": 3
+    }
+  ],
+  "legs_sample": []
+}

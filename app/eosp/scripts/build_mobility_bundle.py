@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import argparse
-import csv
 import json
 import sys
 from collections import Counter
@@ -16,44 +15,11 @@ MOBILITY_VERSION = 1
 SEED_PATCH = "NSEED"
 
 
-def _valid_iata(code: str) -> bool:
-    c = code.strip().upper()
-    return len(c) == 3 and c.isalpha()
-
-
-def _src_dest_from_row(row: list[str]) -> tuple[str, str] | None:
-    """Resolve source/dest IATA columns.
-
-    Standard OpenFlights ``routes.dat`` (9+ columns) uses indices 2 and 4.
-    A stripped 8-column layout (no airline id) uses indices 1 and 3.
-    """
-    if len(row) >= 9:
-        return row[2], row[4]
-    if len(row) >= 8:
-        return row[1], row[3]
-    return None
+from eosp.services.openflights_routes import parse_route_edge_counts
 
 
 def _parse_routes(routes_path: Path) -> Counter[tuple[str, str]]:
-    """Return weekly frequency counts per directed (src, dest) IATA pair."""
-    counts: Counter[tuple[str, str]] = Counter()
-    with routes_path.open(encoding="utf-8", newline="") as f:
-        for row in csv.reader(f):
-            if not row:
-                continue
-            pair = _src_dest_from_row(row)
-            if pair is None:
-                continue
-            raw_src, raw_dest = pair
-            src = raw_src.strip()
-            dest = raw_dest.strip()
-            if not src or not dest or src == r"\N" or dest == r"\N":
-                continue
-            if not _valid_iata(src) or not _valid_iata(dest):
-                continue
-            a, b = src.upper(), dest.upper()
-            counts[(a, b)] += 1
-    return counts
+    return parse_route_edge_counts(routes_path)
 
 
 def _daily_n(weekly_count: int, default_seat_proxy: float) -> float:
@@ -157,7 +123,7 @@ def main(argv: list[str] | None = None) -> None:
     p = argparse.ArgumentParser(
         description=(
             "Build mobility_bundle JSON (+ .meta.json) from an OpenFlights-style routes file. "
-            "Place raw OpenFlights routes.dat under data/raw/openflights/ (gitignored)."
+            "Raw routes.dat may live under data/raw/openflights/ (ODbL; see README)."
         )
     )
     p.add_argument("--routes", type=Path, required=True, help="Path to routes.dat / routes CSV")

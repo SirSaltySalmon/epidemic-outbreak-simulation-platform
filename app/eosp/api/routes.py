@@ -15,6 +15,7 @@ from eosp.core.models import (
     CaseStatus,
     CaseSummary,
     CaseUpdate,
+    ForecastResponse,
     ForecastRunRequest,
     ForecastRunResponse,
     TriggerType,
@@ -78,23 +79,10 @@ def _inference_versions_dicts(repo: Any, limit: int) -> list[dict[str, Any]]:
     return versions
 
 
-def _build_geo_outbreak_for_cases(
-    repo: Any,
-    cases: list[CaseRecord],
-    risk_model: str | None,
-    metapop_runs: int | None,
-) -> dict[str, Any]:
-    """Shared kernel for ``GET /geo/outbreak`` and ``GET /dashboard/bootstrap``."""
-
-    settings = get_settings()
-    effective_risk = risk_model if risk_model is not None else settings.geo_risk_model
-    effective_risk = (effective_risk or "").lower()
-    if effective_risk not in ("legacy", "metapop", "abm_geo"):
-        effective_risk = "legacy"
-    if effective_risk == "metapop" and not settings.metapop_enabled:
-        effective_risk = "legacy"
+def _geo_simulation_context(repo: Any) -> tuple[float, str | None, dict[str, Any] | None, int | None, str | None]:
     p_transmit = 1.5 / 21.5
     inference_version: str | None = None
+    inference = None
     try:
         inference = repo.latest_inference()
         if inference is not None and "p_transmit" in inference.parameters:
@@ -102,41 +90,14 @@ def _build_geo_outbreak_for_cases(
         if inference is not None:
             inference_version = inference.version
     except LookupError:
-        pass
-    if (
-        settings.metapop_enabled
-        and effective_risk == "metapop"
-        and inference_version
-        and hasattr(repo, "get_geo_outbreak_cache")
-    ):
-        cached = repo.get_geo_outbreak_cache(inference_version, metapop_runs=metapop_runs)
-        if cached is not None:
-            return cached
-    if effective_risk == "abm_geo":
-        try:
-            inf = repo.latest_inference()
-            baseline_fc = get_cached_forecast("baseline", repository=repo, inference=inf)
-            abm_geo_forecast = baseline_fc.metadata.get("geo_forecast") if baseline_fc else None
-        except (LookupError, ForecastNotCachedError):
-            baseline_fc = None
-            abm_geo_forecast = None
-    else:
-        abm_geo_forecast = None
-        baseline_fc = None
-        if effective_risk == "legacy":
-            try:
-                if inference is not None:
-                    baseline_fc = get_cached_forecast("baseline", repository=repo, inference=inference)
-            except ForecastNotCachedError:
-                baseline_fc = None
+        inference = None
 
-    legacy_snap = None
+    abm_geo_forecast: dict[str, Any] | None = None
     fc_meta_n_sim: int | None = None
     fc_meta_hash: str | None = None
-    if baseline_fc is not None:
-        lg = baseline_fc.metadata.get("legacy_opensky_geo")
-        if isinstance(lg, dict):
-            legacy_snap = lg
+    try:
+        baseline_fc = get_cached_forecast("baseline", repository=repo, inference=inference)
+        abm_geo_forecast = baseline_fc.metadata.get("geo_forecast")
         raw_n = baseline_fc.metadata.get("n_simulations")
         if isinstance(raw_n, int):
             fc_meta_n_sim = raw_n
@@ -147,14 +108,27 @@ def _build_geo_outbreak_for_cases(
                 fc_meta_n_sim = None
         h = baseline_fc.metadata.get("ensemble_spec_hash")
         fc_meta_hash = str(h) if h else None
+    except ForecastNotCachedError:
+        pass
 
+    return p_transmit, inference_version, abm_geo_forecast, fc_meta_n_sim, fc_meta_hash
+
+
+def _build_geo_outbreak_for_cases(
+    repo: Any,
+    cases: list[CaseRecord],
+    risk_model: str | None,
+    metapop_runs: int | None,
+) -> dict[str, Any]:
+    """Shared kernel for ``GET /geo/outbreak`` and ``GET /dashboard/bootstrap``."""
+
+    _ = risk_model
+    _ = metapop_runs
+    p_transmit, inference_version, abm_geo_forecast, fc_meta_n_sim, fc_meta_hash = _geo_simulation_context(repo)
     return build_outbreak_geo(
         p_transmit=p_transmit,
         cases=cases,
-        risk_model=effective_risk,
-        metapop_n_runs=metapop_runs,
         abm_geo_forecast=abm_geo_forecast,
-        legacy_opensky_geo=legacy_snap,
         inference_version=inference_version,
         forecast_n_simulations=fc_meta_n_sim,
         ensemble_spec_hash=fc_meta_hash,
@@ -169,66 +143,13 @@ def _build_geo_bundle_for_cases(
 ) -> dict[str, Any]:
     """Shared kernel for ``GET /geo/bundle`` — same inputs as geo/outbreak."""
 
-    settings = get_settings()
-    effective_risk = risk_model if risk_model is not None else settings.geo_risk_model
-    effective_risk = (effective_risk or "").lower()
-    if effective_risk not in ("legacy", "metapop", "abm_geo"):
-        effective_risk = "legacy"
-    if effective_risk == "metapop" and not settings.metapop_enabled:
-        effective_risk = "legacy"
-    p_transmit = 1.5 / 21.5
-    inference_version: str | None = None
-    try:
-        inference = repo.latest_inference()
-        if inference is not None and "p_transmit" in inference.parameters:
-            p_transmit = float(inference.parameters["p_transmit"].mean)
-        if inference is not None:
-            inference_version = inference.version
-    except LookupError:
-        pass
-    abm_geo_forecast = None
-    baseline_fc = None
-    if effective_risk == "abm_geo":
-        try:
-            inf = repo.latest_inference()
-            baseline_fc = get_cached_forecast("baseline", repository=repo, inference=inf)
-            abm_geo_forecast = baseline_fc.metadata.get("geo_forecast") if baseline_fc else None
-        except (LookupError, ForecastNotCachedError):
-            baseline_fc = None
-            abm_geo_forecast = None
-    else:
-        if effective_risk == "legacy":
-            try:
-                if inference is not None:
-                    baseline_fc = get_cached_forecast("baseline", repository=repo, inference=inference)
-            except ForecastNotCachedError:
-                baseline_fc = None
-
-    legacy_snap = None
-    fc_meta_n_sim: int | None = None
-    fc_meta_hash: str | None = None
-    if baseline_fc is not None:
-        lg = baseline_fc.metadata.get("legacy_opensky_geo")
-        if isinstance(lg, dict):
-            legacy_snap = lg
-        raw_n = baseline_fc.metadata.get("n_simulations")
-        if isinstance(raw_n, int):
-            fc_meta_n_sim = raw_n
-        elif raw_n is not None:
-            try:
-                fc_meta_n_sim = int(raw_n)
-            except (TypeError, ValueError):
-                fc_meta_n_sim = None
-        h = baseline_fc.metadata.get("ensemble_spec_hash")
-        fc_meta_hash = str(h) if h else None
-
+    _ = risk_model
+    _ = metapop_runs
+    p_transmit, inference_version, abm_geo_forecast, fc_meta_n_sim, fc_meta_hash = _geo_simulation_context(repo)
     return build_geo_bundle(
         p_transmit=p_transmit,
         cases=cases,
-        risk_model=effective_risk,
-        metapop_n_runs=metapop_runs,
         abm_geo_forecast=abm_geo_forecast,
-        legacy_opensky_geo=legacy_snap,
         inference_version=inference_version,
         forecast_n_simulations=fc_meta_n_sim,
         ensemble_spec_hash=fc_meta_hash,

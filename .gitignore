@@ -3,6 +3,8 @@ data/raw/*
 !data/raw/openflights/
 data/raw/openflights/*
 !data/raw/openflights/.gitkeep
+!data/raw/openflights/airports.dat
+!data/raw/openflights/routes.dat
 # Generated mobility bundles (build locally; see README "Mobility bundle")
 app/eosp/data/bundles/*.json
 app/eosp/data/bundles/*.meta.json
@@ -19,3 +21,4 @@ build/
 .env
 # Local git worktrees (see superpowers:using-git-worktrees)
 .worktrees/
+key.pem

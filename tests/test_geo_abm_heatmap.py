@@ -25,15 +25,14 @@ def test_heatmap_rows_from_abm_geo_uses_cumulative_median():
     assert rows[0]["lat"] == -26.1
 
 
-def test_build_outbreak_geo_abm_geo_fallback_without_forecast():
+def test_build_outbreak_geo_without_forecast_has_empty_heatmap():
     from eosp.core.seed_data import CASES
     from eosp.services.geo import build_outbreak_geo
 
     out = build_outbreak_geo(
         p_transmit=0.1,
         cases=list(CASES),
-        risk_model="abm_geo",
         abm_geo_forecast=None,
     )
-    assert out["metadata"].get("abm_geo_fallback_reason")
-    assert "risk_heatmap" in out and len(out["risk_heatmap"]) > 0
+    assert out["metadata"].get("risk_source") == "abm_geo_unavailable"
+    assert out["risk_heatmap"] == []

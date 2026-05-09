@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import collections
 import logging
-import os
 import threading
 import time
 import uuid
@@ -22,15 +21,12 @@ from typing import Any, Mapping
 
 from eosp.core.case_statistics import (
     total_cohort_persons,
-    total_death_equivalents,
     validation_quality_weighted_mean,
 )
 from eosp.core.models import CaseRecord, InferenceResult, TriggerType
-from eosp.core.settings import get_settings
-from eosp.services.ensemble import EnsembleConfig, run_ensemble, seed_state_from_case_counts
-from eosp.services.geo import build_outbreak_geo
+from eosp.services.ensemble import EnsembleConfig, run_ensemble, seed_state_from_case_records
 from eosp.services.inference import InferenceConfig, run_inference
-from eosp.services.network import ContactNetwork
+from eosp.services.network import ContactNetwork, build_default_network
 from eosp.services.scenarios import ScenarioSpec
 
 
@@ -235,6 +231,14 @@ class JobManager:
             "quality_mean": validation_quality_weighted_mean(cases),
         })
 
+        n_override = record.detail.get("n_simulations")
+        ensemble_cfg = (
+            replace(self._ensemble_config, n_simulations=int(n_override))
+            if n_override is not None
+            else self._ensemble_config
+        )
+        world_network = build_default_network(cases=cases, n_days=ensemble_cfg.n_days)
+
         previous_inference: InferenceResult | None = None
         try:
             previous_inference = self._repository.latest_inference()
@@ -243,7 +247,7 @@ class JobManager:
 
         artifacts = run_inference(
             cases=cases,
-            network=self._network,
+            network=world_network,
             config=self._inference_config,
             trigger=trigger,
             previous_inference=previous_inference,
@@ -272,13 +276,6 @@ class JobManager:
             "chain_rhat": list(diag["rhat"].values()) if diag.get("rhat") else [],
         })
 
-        n_override = record.detail.get("n_simulations")
-        ensemble_cfg = (
-            replace(self._ensemble_config, n_simulations=int(n_override))
-            if n_override is not None
-            else self._ensemble_config
-        )
-
         requested = record.detail.get("scenarios_requested")
         if requested is None:
             scenario_items: list[tuple[str, ScenarioSpec]] = list(self._scenarios.items())
@@ -292,7 +289,7 @@ class JobManager:
                     raise KeyError(name)
                 scenario_items.append((name, spec))
 
-        seed = self._build_seed_state(cases)
+        seed = self._build_seed_state(cases, world_network)
         for scenario_name, spec in scenario_items:
             total_simulations = int(ensemble_cfg.n_simulations)
             record.push_event({
@@ -309,7 +306,7 @@ class JobManager:
             response = run_ensemble(
                 scenario=spec,
                 inference=inference,
-                network=self._network,
+                network=world_network,
                 seed=seed,
                 config=ensemble_cfg,
                 posterior_samples=samples,
@@ -326,73 +323,17 @@ class JobManager:
             })
         record.detail["scenarios_refreshed"] = [n for n, _ in scenario_items]
 
-        _st = get_settings()
-        if (
-            _st.metapop_enabled
-            and (_st.geo_risk_model or "").strip().lower() == "metapop"
-        ):
-            n_runs_env = int(os.environ.get("EOSP_METAPOP_RUNS", "64"))
-            record.push_event({
-                "stage": "metapop_geo",
-                "status": "running",
-                "metapop_n_runs": n_runs_env,
-            })
-            geo_detail: dict[str, Any]
-            try:
-                p_transmit = (
-                    float(inference.parameters["p_transmit"].mean)
-                    if "p_transmit" in inference.parameters
-                    else 1.5 / 21.5
-                )
-                geo_payload = build_outbreak_geo(
-                    p_transmit=p_transmit,
-                    cases=cases,
-                    risk_model="metapop",
-                    metapop_n_runs=n_runs_env,
-                    metapop_progress_callback=lambda ev: self.push_event(
-                        record.job_id,
-                        {
-                            "stage": "metapop_geo",
-                            "status": "running",
-                            "runs_completed": ev["runs_completed"],
-                            "total_runs": ev["total_runs"],
-                            "metapop_n_runs": n_runs_env,
-                            "elapsed_s": ev.get("elapsed_s"),
-                        },
-                    ),
-                )
-                if hasattr(self._repository, "cache_geo_outbreak"):
-                    self._repository.cache_geo_outbreak(inference.version, geo_payload)
-                meta = geo_payload.get("metadata") or {}
-                geo_detail = {
-                    "status": "complete",
-                    "metapop_n_runs": meta.get("metapop_n_runs"),
-                    "p_transmit_used": meta.get("p_transmit_used"),
-                    "risk_source": meta.get("risk_source"),
-                }
-                record.push_event(
-                    {
-                        "stage": "metapop_geo",
-                        "status": "complete",
-                        **geo_detail,
-                    }
-                )
-            except Exception as exc:  # noqa: BLE001 — keep job successful; map can rebuild on GET
-                logger.exception("Metapop geo stage failed after ensemble: %s", exc)
-                geo_detail = {"status": "failed", "error": f"{type(exc).__name__}: {exc}"}
-                record.push_event({"stage": "metapop_geo", **geo_detail})
-            record.detail["metapop_geo"] = geo_detail
-
     def _run_single_ensemble(self, record: JobRecord, scenario_name: str) -> None:
         if scenario_name not in self._scenarios:
             raise KeyError(scenario_name)
         cases = self._load_cases()
-        seed = self._build_seed_state(cases)
+        world_network = build_default_network(cases=cases, n_days=self._ensemble_config.n_days)
+        seed = self._build_seed_state(cases, world_network)
         inference = self._repository.latest_inference()
         response = run_ensemble(
             scenario=self._scenarios[scenario_name],
             inference=inference,
-            network=self._network,
+            network=world_network,
             seed=seed,
             config=self._ensemble_config,
         )
@@ -406,21 +347,8 @@ class JobManager:
             logger.warning("Failed to load cases for inference: %s", exc)
             return []
 
-    def _build_seed_state(self, cases: list[CaseRecord]) -> Any:
-        n_total = int(total_cohort_persons(cases))
-        n_deceased = int(total_death_equivalents(cases))
-        n_observed_alive = max(0, n_total - n_deceased)
-        n_recovered = max(0, n_observed_alive - 2)
-        n_active = min(2, n_observed_alive)
-        hidden_multiplier = 1.5
-        n_hidden_exposed = max(4, int(round(n_total * hidden_multiplier)))
-        return seed_state_from_case_counts(
-            network=self._network,
-            n_recent_active=n_active + 1,
-            n_recovered=n_recovered,
-            n_deceased=n_deceased,
-            n_recently_exposed=n_hidden_exposed,
-        )
+    def _build_seed_state(self, cases: list[CaseRecord], network: ContactNetwork) -> Any:
+        return seed_state_from_case_records(network=network, cases=cases, rng_seed=20260507)
 
     def _update_inference(self, inference: InferenceResult) -> None:
         if hasattr(self._repository, "update_inference"):

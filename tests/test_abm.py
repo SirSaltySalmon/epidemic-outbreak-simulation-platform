@@ -1,5 +1,6 @@
 import numpy as np
 
+from eosp.services import abm
 from eosp.services.abm import SeedState, simulate_trajectory
 from eosp.services.network import build_default_network
 
@@ -19,7 +20,7 @@ def test_simulate_trajectory_returns_consistent_shapes():
     seed = SeedState(exposed=[10, 11, 12], infectious=[0, 1], recovered=[], deceased=[])
     trajectory = simulate_trajectory(network, PARAMS, seed=seed, n_days=14, rng=rng)
 
-    assert trajectory.daily_counts.shape == (15, 5)
+    assert trajectory.daily_counts.shape == (15, abm.N_STATES)
     assert trajectory.cumulative_cases.shape == (15,)
     assert trajectory.cumulative_deaths.shape == (15,)
     assert trajectory.new_cases_per_day.shape == (15,)

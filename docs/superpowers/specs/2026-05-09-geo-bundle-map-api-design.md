@@ -301,3 +301,32 @@ When ABM geo forecast is unavailable (no cached baseline or `by_day` is empty):
 - **Flight data realism.** The bucket-to-airport mapping still comes from `network_spec.json` destinations, not a live flight ledger. Track B handles this.
 - **Second-hop transmission.** Airports are still relay points; agents do not infect non-cohort susceptibles at airport patches. Track B handles this.
 - **Itinerary timing.** The `depart_day` field in evacuation_flights is display-only. Track B handles movement-driven exposure.
+
+---
+
+## 10. Track B addendum — dynamic buckets and flight ledger (2026-05-09)
+
+**Status:** Track B supersedes §2 “Track A only” for **simulation geography**: map and `geo_forecast` buckets are **no longer limited** to a fixed set of `network_spec.json` destination codes. They are driven by **case seeding**, **static or ingested flight schedules**, and **per-agent itineraries**.
+
+### 10.1 Cardinality and identifiers
+
+- **`features[]` length** is **not bounded** by three hubs. It includes every **bucket** (`bucket_code`) that appears in the **ensemble’s** `geo_forecast.by_day` for the cached baseline run (union of patches visited by any agent across simulations), plus optional static nodes such as `ship` when present in labels.
+- **`bucket_code`** may be a **legacy cluster key** (e.g. `ZA_JNB`) or, in later phases, a **patch id** / **IATA-only** code; clients must treat `bucket_code` as an opaque display key and join with `airport_iata` / coordinates when provided.
+- **`geo_forecast.bucket_order`** (when present) lists buckets for the **trajectory tensors** used in aggregation; its length is **variable** across runs if the world builder discovers more airports from the schedule or seed anchors.
+
+### 10.2 Data dependencies (replacement for `network_spec.json`)
+
+- **`network_spec.json` is deprecated** as the source of truth for **contact topology** and **evacuation legs**. Replace with:
+  - **`spawn_profile.json`** — ship cohort size, UI stub, RNG seed, optional gateway priors.
+  - **`flight_schedules_baseline.json`** (or DB snapshot + `flight_legs`) — canonical schedule rows; **`snapshot_id = SHA-256(canonical_json)`** for reproducibility and API metadata.
+- **`evacuation_flights` in `geo_bundle`** may be derived from the **baseline schedule** for map arcs, omitted, or replaced by **case-weighted** overlays per product design.
+
+### 10.3 `geo_bundle` / `geo_forecast` invariants under Track B
+
+- **`schema_version`** remains the contract version for the **envelope** (`simulation.layers`, `observed`, `provenance`, `errors`). Breaking changes still require bumping `schema_version`.
+- **Primary heat metric** remains **`cumulative_infected`** final-day medians (§3.2); **peak infectious** secondary layer unchanged (§3.3).
+- **Fallback when ABM geo is missing** is **empty heat + structured `errors[]`** (no second kernel).
+
+### 10.4 Metadata provenance
+
+Forecast **`metadata`** should carry **`flight_snapshot_id`** (or equivalent) and a compact **`seed_manifest`** (counts per anchor airport / cohort) whenever Track B world building is used, so results stay auditable without `network_spec_hash`.

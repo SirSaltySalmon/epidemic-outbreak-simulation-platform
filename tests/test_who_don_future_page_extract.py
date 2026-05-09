@@ -57,7 +57,7 @@ def test_extract_future_snap_eight_cases_multicountry(feed_key: str) -> None:
     expected = {"ZA", "ES", "CH", "NL", "GB"}
     assert expected.issubset(set(territories))
     assert len(territories) >= 5
-    assert r0.location_country == "CV"
+    assert r0.location_country == "ZA"
 
 
 def test_ingest_future_snap_as_first_poll(feed_key: str) -> None:

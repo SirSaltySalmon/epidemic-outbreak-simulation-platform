@@ -2,6 +2,7 @@ from datetime import date
 
 import numpy as np
 
+from eosp.services import abm
 from eosp.services.abm import Trajectory
 from eosp.services.ensemble import _aggregate_geo_forecast
 
@@ -11,7 +12,7 @@ def test_aggregate_geo_forecast_nested_cumulative_and_infectious_I():
     z = np.zeros
     t0 = Trajectory(
         n_days=2,
-        daily_counts=z((3, 5), dtype=np.int32),
+        daily_counts=z((3, abm.N_STATES), dtype=np.int32),
         cumulative_cases=z(3, dtype=np.int32),
         cumulative_deaths=z(3, dtype=np.int32),
         new_cases_per_day=z(3, dtype=np.int32),
@@ -21,7 +22,7 @@ def test_aggregate_geo_forecast_nested_cumulative_and_infectious_I():
     )
     t1 = Trajectory(
         n_days=2,
-        daily_counts=z((3, 5), dtype=np.int32),
+        daily_counts=z((3, abm.N_STATES), dtype=np.int32),
         cumulative_cases=z(3, dtype=np.int32),
         cumulative_deaths=z(3, dtype=np.int32),
         new_cases_per_day=z(3, dtype=np.int32),

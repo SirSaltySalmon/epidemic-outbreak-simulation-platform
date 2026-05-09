@@ -24,7 +24,6 @@ dependencies = [
     "numpyro>=0.15.0",
     "jax[cpu]>=0.4.30",
     "arviz>=0.18.0",
-    "opensky-api @ git+https://github.com/openskynetwork/opensky-api.git#subdirectory=python",
 ]
 
 [project.optional-dependencies]

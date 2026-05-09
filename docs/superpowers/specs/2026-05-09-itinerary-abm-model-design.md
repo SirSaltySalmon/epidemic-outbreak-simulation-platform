@@ -189,7 +189,7 @@ The `2026-05-09-geographic-abm-flight-design.md` spec requires near-real flight 
 
 ### 6.2 Interim path: static community datasets
 
-Use [OpenFlights](https://openflights.org/data.html) route and airport data as the baseline. It is CC-BY licensed, freely redistributable, and covers all major hubs. Supplement with manually curated schedules for the specific evacuation corridors (JNB–ZRH, JNB–AMS, HLE-related) derived from published IATA schedules.
+Use [OpenFlights](https://openflights.org/data.html) route and airport data as the baseline (see repository README for **ODbL** terms when using the exported `airports.dat` / `routes.dat`). Supplement with manually curated schedules for specific hub corridors derived from published IATA schedules when needed.
 
 Bundle the static dataset as `data/flight_schedules_baseline.json` with a `bundle_date` field. The `flight_snapshot_id` is the SHA-256 of the file content. This is reproducible, testable, and costs nothing to operate.
 

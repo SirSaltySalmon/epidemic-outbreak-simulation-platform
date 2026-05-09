@@ -42,7 +42,9 @@ python -m pytest
 
 ### Mobility bundle (open data)
 
-The metapop risk map can consume a mobility schedule built from open flight route data. Download OpenFlights `routes.dat` into `data/raw/openflights/` (that tree is gitignored for large files). From the repository root, with the project installed (`python -m pip install -e ".[test]"` or similar), run:
+OpenFlights [Airport and Route databases](https://openflights.org/data.html) are under the [**Open Database License (ODbL)**](https://opendatacommons.org/licenses/odbl/). You may commit `data/raw/openflights/airports.dat` and `routes.dat` in this repo (they are not gitignored); attribute the source and respect ODbL share-alike terms if you redistribute derivatives.
+
+The metapop risk map can consume a mobility schedule built from route data. With the project installed (`python -m pip install -e ".[test]"` or similar), run:
 
 ```powershell
 python -m eosp.scripts.build_mobility_bundle --routes data/raw/openflights/routes.dat --out-json app/eosp/data/bundles/example.json

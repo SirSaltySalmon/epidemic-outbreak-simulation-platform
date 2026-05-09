@@ -74,6 +74,16 @@
     <!-- World map -->
     <section class="map-panel" aria-label="Global outbreak and risk map">
         <div id="world-map"></div>
+        <div class="map-layer-toggles" role="group" aria-label="Map overlays">
+          <label class="map-layer-toggles__item">
+            <input type="checkbox" id="map-layer-recorded" checked />
+            Recorded cases
+          </label>
+          <label class="map-layer-toggles__item">
+            <input type="checkbox" id="map-layer-forecast" checked />
+            Forecast (model)
+          </label>
+        </div>
         <p class="map-legend" id="map-legend" aria-live="polite"></p>
     </section>
 
@@ -101,6 +111,112 @@
         </div>
         <p class="cases-empty" id="cases-empty" hidden></p>
         <div class="cases-scroll" id="cases-scroll" role="list" aria-label="Case rows from the database"></div>
+      </div>
+    </section>
+
+    <!-- How the model works (public + technical) -->
+    <section class="model-explain-section chart-panel" aria-labelledby="model-explain-heading">
+      <div class="panel-heading">
+        <h2 id="model-explain-heading">How this simulation works</h2>
+      </div>
+      <div class="model-explain-intro">
+        <p class="model-explain-lead">
+          This page shows <strong>recorded outbreak lines</strong> alongside a <strong>computer simulation</strong> of how infection could spread among a small, carefully defined group of people tied to major airports—not the whole global population, and not everyone still in the original travel context.
+        </p>
+        <p class="model-explain-lead">
+          The colored bands on the chart are <strong>uncertainty</strong>: the model is run many times with slightly different random outcomes so you can see a plausible range, not a single guess.
+        </p>
+      </div>
+
+      <div class="model-diagram-grid" role="img" aria-label="Diagram: from health records to forecast">
+        <figure class="model-diagram-card">
+          <figcaption class="model-diagram-caption">From data to forecast</figcaption>
+          <svg class="model-svg" viewBox="0 0 320 120" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+            <defs>
+              <linearGradient id="g1" x1="0" y1="0" x2="1" y2="0">
+                <stop offset="0%" stop-color="#0b7c83"/><stop offset="100%" stop-color="#2f7d4f"/>
+              </linearGradient>
+            </defs>
+            <rect x="8" y="28" width="72" height="56" rx="6" fill="#162e29" stroke="#1e3530"/>
+            <text x="44" y="52" text-anchor="middle" fill="#9ccac6" font-size="11" font-family="system-ui,sans-serif">Cases</text>
+            <text x="44" y="66" text-anchor="middle" fill="#6b9990" font-size="9" font-family="system-ui,sans-serif">we observe</text>
+            <path d="M88 56h28" stroke="#6b9990" stroke-width="2" marker-end="url(#arr)"/>
+            <rect x="124" y="28" width="72" height="56" rx="6" fill="#162e29" stroke="#0b7c83"/>
+            <text x="160" y="50" text-anchor="middle" fill="#e0f0ed" font-size="10" font-family="system-ui,sans-serif">Learn how</text>
+            <text x="160" y="64" text-anchor="middle" fill="#e0f0ed" font-size="10" font-family="system-ui,sans-serif">fast it spreads</text>
+            <path d="M204 56h28" stroke="#6b9990" stroke-width="2"/>
+            <rect x="240" y="28" width="72" height="56" rx="6" fill="#162e29" stroke="#1e3530"/>
+            <text x="276" y="50" text-anchor="middle" fill="#9ccac6" font-size="10" font-family="system-ui,sans-serif">Many</text>
+            <text x="276" y="64" text-anchor="middle" fill="#9ccac6" font-size="10" font-family="system-ui,sans-serif">trial runs</text>
+            <text x="160" y="108" text-anchor="middle" fill="#6b9990" font-size="10" font-family="system-ui,sans-serif">→ median curve + shaded “could be” range</text>
+            <defs><marker id="arr" markerWidth="6" markerHeight="6" refX="5" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6 Z" fill="#6b9990"/></marker></defs>
+          </svg>
+        </figure>
+        <figure class="model-diagram-card">
+          <figcaption class="model-diagram-caption">Who is in the model</figcaption>
+          <svg class="model-svg" viewBox="0 0 320 120" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+            <!-- four hub nodes -->
+            <circle cx="48" cy="56" r="22" fill="#0d1e1b" stroke="#0b7c83" stroke-width="2"/>
+            <text x="48" y="60" text-anchor="middle" fill="#9ccac6" font-size="12" font-weight="600" font-family="system-ui,sans-serif">JNB</text>
+            <circle cx="118" cy="56" r="22" fill="#0d1e1b" stroke="#0b7c83" stroke-width="2"/>
+            <text x="118" y="60" text-anchor="middle" fill="#9ccac6" font-size="12" font-weight="600" font-family="system-ui,sans-serif">DOH</text>
+            <circle cx="188" cy="56" r="22" fill="#0d1e1b" stroke="#0b7c83" stroke-width="2"/>
+            <text x="188" y="60" text-anchor="middle" fill="#9ccac6" font-size="12" font-weight="600" font-family="system-ui,sans-serif">ZRH</text>
+            <circle cx="258" cy="56" r="22" fill="#0d1e1b" stroke="#0b7c83" stroke-width="2"/>
+            <text x="258" y="60" text-anchor="middle" fill="#9ccac6" font-size="12" font-weight="600" font-family="system-ui,sans-serif">AMS</text>
+            <!-- dots = people -->
+            <g fill="#b95b35">
+              <circle cx="38" cy="48" r="3"/><circle cx="44" cy="52" r="3"/><circle cx="56" cy="50" r="3"/><circle cx="50" cy="58" r="3"/><circle cx="42" cy="62" r="3"/>
+            </g>
+            <g fill="#b95b35">
+              <circle cx="108" cy="48" r="3"/><circle cx="114" cy="52" r="3"/><circle cx="126" cy="50" r="3"/><circle cx="120" cy="58" r="3"/><circle cx="112" cy="62" r="3"/>
+            </g>
+            <g fill="#b95b35">
+              <circle cx="178" cy="48" r="3"/><circle cx="184" cy="52" r="3"/><circle cx="196" cy="50" r="3"/><circle cx="190" cy="58" r="3"/><circle cx="182" cy="62" r="3"/>
+            </g>
+            <g fill="#b95b35">
+              <circle cx="248" cy="48" r="3"/><circle cx="254" cy="52" r="3"/><circle cx="266" cy="50" r="3"/><circle cx="260" cy="58" r="3"/><circle cx="252" cy="62" r="3"/>
+            </g>
+            <text x="160" y="102" text-anchor="middle" fill="#6b9990" font-size="10" font-family="system-ui,sans-serif">Starts at four hubs where the first patients travelled through</text>
+          </svg>
+        </figure>
+        <figure class="model-diagram-card">
+          <figcaption class="model-diagram-caption">Health states (simplified)</figcaption>
+          <svg class="model-svg" viewBox="0 0 320 88" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+            <rect x="10" y="32" width="52" height="28" rx="4" fill="#162e29" stroke="#1e3530"/>
+            <text x="36" y="50" text-anchor="middle" fill="#e0f0ed" font-size="11" font-family="system-ui,sans-serif">Susceptible</text>
+            <text x="74" y="48" fill="#6b9990" font-size="14" font-family="system-ui,sans-serif">→</text>
+            <rect x="88" y="32" width="52" height="28" rx="4" fill="#162e29" stroke="#d89c22"/>
+            <text x="114" y="50" text-anchor="middle" fill="#e0f0ed" font-size="11" font-family="system-ui,sans-serif">Exposed</text>
+            <text x="152" y="48" fill="#6b9990" font-size="14" font-family="system-ui,sans-serif">→</text>
+            <rect x="166" y="32" width="52" height="28" rx="4" fill="#162e29" stroke="#b95b35"/>
+            <text x="192" y="50" text-anchor="middle" fill="#e0f0ed" font-size="11" font-family="system-ui,sans-serif">Infectious</text>
+            <text x="230" y="48" fill="#6b9990" font-size="14" font-family="system-ui,sans-serif">→</text>
+            <rect x="244" y="26" width="62" height="20" rx="4" fill="#162e29" stroke="#2f7d4f"/>
+            <text x="275" y="40" text-anchor="middle" fill="#9ccac6" font-size="10" font-family="system-ui,sans-serif">Recovered</text>
+            <rect x="244" y="50" width="62" height="20" rx="4" fill="#162e29" stroke="#5a1e1e"/>
+            <text x="275" y="64" text-anchor="middle" fill="#c7928c" font-size="10" font-family="system-ui,sans-serif">Deceased</text>
+            <text x="160" y="82" text-anchor="middle" fill="#6b9990" font-size="9" font-family="system-ui,sans-serif">The real model adds finer stages (e.g. hospital); this is the idea in plain language.</text>
+          </svg>
+        </figure>
+      </div>
+
+      <ul class="model-explain-bullets">
+        <li><strong>The map</strong> shows where risk is elevated in the simulation on each day, using the same airport “patches” people move through—not a census of everyone who lives there.</li>
+        <li><strong>Scenarios</strong> (sidebar) change assumptions—such as cutting some contacts—so you can compare “what if” without pretending any option is certain.</li>
+        <li><strong>Limitations:</strong> schedules come from public flight-route data (connections, not your personal ticket); counts near hubs are placeholders until official numbers are plugged in; the model cannot predict real-world policy or behavior changes it does not know about.</li>
+      </ul>
+
+      <div class="model-technical" id="model-technical-details">
+        <h3 class="model-technical-heading">Technical details</h3>
+        <div class="model-technical-body">
+          <p><strong>Cohort.</strong> The default world tracks eighty agents: twenty placed at each of four hub IATA codes (JNB, DOH, ZRH, AMS), sized from the static baseline JSON. They represent a contact / onward-travel ring around known case locations, not the full ship population or general public.</p>
+          <p><strong>Movement.</strong> After day zero, each agent’s airport follows a Markov step on directed edge weights from OpenFlights <code>routes.dat</code> (weekly row counts). Country labels from <code>airports.dat</code> support a configurable domestic continuation bias; if domestic onward edges are missing, the agent stays. Optional environment overrides: <code>EOSP_OPENFLIGHTS_ROUTES</code>, <code>EOSP_OPENFLIGHTS_AIRPORTS</code>.</p>
+          <p><strong>Dynamics.</strong> Transmission uses itinerary patch co-location and same-flight mass action (Track&nbsp;B). Agents follow a compartment SEIPHR+D style update with stochastic daily progression. Edge layers are empty in the default build so contacts are driven by patch mixing, not a static ship graph.</p>
+          <p><strong>Inference vs. initial conditions.</strong> Bayesian posteriors supply transmission and disease parameters (e.g. transmissibility, contact intensity, incubation, severity). Initial exposed / infectious / recovered / deceased counts are allocated from aggregated case records onto the cohort. When raw totals exceed the cohort size, counts are scaled proportionally with largest-remainder integer rounding; metadata may include <code>seed_scaling</code>. This is not an independent draw of “sick or well” for every agent from the posterior.</p>
+          <p><strong>Scenarios.</strong> Scenario specs adjust parameters and network modifiers before ensembles are run; comparison responses are derived from cached forecasts per scenario.</p>
+          <p><strong>Provenance.</strong> Flight baseline snapshots hash canonical JSON and may incorporate a SHA-256 of the routes file. OpenFlights derivatives are ODbL—see project README for attribution when publishing graphs or downstream datasets.</p>
+        </div>
       </div>
     </section>
 

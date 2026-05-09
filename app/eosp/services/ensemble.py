@@ -20,7 +20,8 @@ from typing import Any, Callable, Iterable, Mapping, cast
 
 import numpy as np
 
-from eosp.core.models import ForecastPoint, ForecastResponse, InferenceResult
+from eosp.core.case_statistics import total_cohort_persons, total_death_equivalents
+from eosp.core.models import CaseRecord, ForecastPoint, ForecastResponse, InferenceResult
 from eosp.services.abm import SeedState, Trajectory, simulate_trajectory
 from eosp.services.geo_buckets import (
     GEO_BUCKET_METRIC_DETAIL,
@@ -30,6 +31,7 @@ from eosp.services.geo_buckets import (
     GEO_BUCKET_METRIC_PEAK_INFECTIOUS_I_DETAIL,
     GEO_BUCKET_METRIC_PEAK_INFECTIOUS_I_ID,
 )
+from eosp.services.itinerary import RISK_METRIC_DETAIL
 from eosp.services.network import ContactNetwork
 from eosp.services.scenarios import ScenarioSpec
 
@@ -96,6 +98,7 @@ def run_ensemble(
             "model_version": inference.version,
             "n_simulations": config.n_simulations,
             "ensemble_spec_hash": ensemble_spec_hash,
+            "risk_metric_detail": RISK_METRIC_DETAIL,
             "parameter_values": {
                 "p_transmit_mean": float(np.mean(samples["p_transmit"])),
                 "p_transmit_std": float(np.std(samples["p_transmit"])),
@@ -113,14 +116,25 @@ def run_ensemble(
             "n_agents": float(scenario_network.n_agents),
             "scenario_modifications": scenario.network_modifications,
     }
+    gw = scenario_network.gateway_weights
+    if gw:
+        metadata["gateway_weights"] = dict(gw)
+        if scenario_network.gateway_pseudocount is not None:
+            metadata["gateway_pseudocount"] = float(scenario_network.gateway_pseudocount)
+    if scenario_network.itinerary_snapshot_id:
+        metadata["flight_snapshot_id"] = scenario_network.itinerary_snapshot_id
+    if scenario_network.itinerary_seed_manifest:
+        metadata["seed_manifest"] = dict(scenario_network.itinerary_seed_manifest)
+    if scenario.parameter_overrides.get("degraded_flight_coverage"):
+        metadata["degraded_flight_coverage"] = True
+    if seed.seed_scaling is not None:
+        metadata["seed_scaling"] = dict(seed.seed_scaling)
+    metadata["inference_vs_initial_states_note"] = (
+        "Inference drives transmission parameters; initial E/I/R/D counts are case-derived "
+        "allocation on agents in the seeded pool (see seed_scaling when totals exceeded the pool)."
+    )
     if geo_forecast is not None:
         metadata["geo_forecast"] = geo_forecast
-    if scenario.name == "baseline":
-        from eosp.services.geo import build_legacy_opensky_geo_snapshot
-
-        metadata["legacy_opensky_geo"] = build_legacy_opensky_geo_snapshot(
-            float(inference.parameters["p_transmit"].mean)
-        )
     response = ForecastResponse(
         scenario=scenario.name,
         forecast=points,
@@ -398,8 +412,8 @@ def _aggregate_geo_forecast(
         "metric_detail": GEO_BUCKET_METRIC_DETAIL,
         "source": "abm_monte_carlo",
         "distinct_from": (
-            "Legacy OpenSky ring heat on /geo/outbreak and optional abm_geo paths "
-            "use flight heuristics or alternate exports, not these ABM bucket percentiles."
+            "Map heat from /geo/outbreak uses the same bucket medians when a baseline geo_forecast is cached; "
+            "other overlays may use different kernels."
         ),
         "by_day": by_day,
     }
@@ -434,6 +448,114 @@ def _summary_to_params(inference: InferenceResult) -> dict[str, float]:
     return out
 
 
+def _cohort_agent_indices(network: ContactNetwork) -> list[int]:
+    """Agents eligible for case-anchored seeding.
+
+    Prefer explicit ``cohort_agent`` metadata from the hub world; fall back to
+    all non-``ship_member`` agents, then the full roster (legacy spec networks).
+    """
+
+    preferred: list[int] = []
+    for i, m in enumerate(network.node_metadata):
+        if m.get("ship_member"):
+            continue
+        if m.get("cohort_agent") is False:
+            continue
+        preferred.append(i)
+    if preferred:
+        return preferred
+    non_ship = [i for i, m in enumerate(network.node_metadata) if not m.get("ship_member")]
+    if non_ship:
+        return non_ship
+    return list(range(network.n_agents))
+
+
+def seed_state_from_case_records(
+    *,
+    network: ContactNetwork,
+    cases: list[CaseRecord],
+    rng_seed: int = 20260507,
+) -> SeedState:
+    """Allocate initial E/I/R/D from case aggregates on the contact cohort.
+
+    When raw compartment totals exceed the cohort pool, counts are scaled
+    proportionally (largest remainder; tie-break order D, I, E, R) and
+    ``seed_scaling`` is attached.
+    """
+
+    rng = np.random.default_rng(rng_seed)
+    cohort_ix = _cohort_agent_indices(network)
+    anchor: list[int] = []
+    for i in cohort_ix:
+        m = network.node_metadata[i]
+        hi = str(m.get("home_iata") or "").upper()
+        if not hi:
+            continue
+        for c in cases:
+            ca = (c.location_airport_code or "").upper()
+            if ca and hi == ca:
+                anchor.append(i)
+                break
+    anch_set = set(anchor)
+    rest = [i for i in cohort_ix if i not in anch_set]
+    rng.shuffle(rest)
+    pool = list(dict.fromkeys(anchor)) + rest
+    n_pool = len(pool)
+
+    n_total = int(total_cohort_persons(cases)) if cases else 0
+    n_deceased = int(total_death_equivalents(cases)) if cases else 0
+    n_observed_alive = max(0, n_total - n_deceased)
+    n_recovered = max(0, n_observed_alive - 2)
+    n_active = min(2, n_observed_alive)
+    hidden_multiplier = 1.5
+    e0 = max(4, int(round(n_total * hidden_multiplier))) if cases else max(4, 4)
+    i0 = n_active + 1
+    r0 = n_recovered
+    d0 = n_deceased
+
+    seed_scaling: dict[str, Any] | None = None
+    if n_pool <= 0:
+        return SeedState(exposed=[], infectious=[], recovered=[], deceased=[], seed_scaling=None)
+
+    s_raw = e0 + i0 + r0 + d0
+    if s_raw == 0:
+        e, i, r, d = 0, 0, 0, 0
+    elif s_raw <= n_pool:
+        e, i, r, d = e0, i0, r0, d0
+    else:
+        scale = n_pool / s_raw
+        floats = {"E": e0 * scale, "I": i0 * scale, "R": r0 * scale, "D": d0 * scale}
+        floors = {k: int(floats[k]) for k in floats}
+        rem = n_pool - sum(floors.values())
+        tie_order = ("D", "I", "E", "R")
+        ordered = sorted(tie_order, key=lambda k: (-(floats[k] - floors[k]), tie_order.index(k)))
+        for j in range(rem):
+            floors[ordered[j]] += 1
+        e, i, r, d = floors["E"], floors["I"], floors["R"], floors["D"]
+        seed_scaling = {
+            "method": "proportional_to_pool",
+            "n_pool": n_pool,
+            "raw": {"E": e0, "I": i0, "R": r0, "D": d0},
+            "applied": {"E": e, "I": i, "R": r, "D": d},
+        }
+
+    def take(n: int) -> list[int]:
+        nn = max(0, min(int(n), len(pool)))
+        if nn == 0:
+            return []
+        chosen = pool[:nn]
+        del pool[:nn]
+        return chosen
+
+    return SeedState(
+        exposed=take(e),
+        infectious=take(i),
+        recovered=take(r),
+        deceased=take(d),
+        seed_scaling=seed_scaling,
+    )
+
+
 def seed_state_from_case_counts(
     *,
     network: ContactNetwork,
@@ -444,16 +566,15 @@ def seed_state_from_case_counts(
     rng_seed: int = 20260507,
 ) -> SeedState:
     rng = np.random.default_rng(rng_seed)
-    ship_indices = network.ship_node_indices() or list(range(network.n_agents))
-    pool = list(ship_indices)
+    pool = list(_cohort_agent_indices(network))
     rng.shuffle(pool)
 
     def take(n: int) -> list[int]:
-        n = max(0, min(n, len(pool)))
-        if n == 0:
+        nn = max(0, min(int(n), len(pool)))
+        if nn == 0:
             return []
-        chosen = pool[:n]
-        del pool[:n]
+        chosen = pool[:nn]
+        del pool[:nn]
         return chosen
 
     return SeedState(

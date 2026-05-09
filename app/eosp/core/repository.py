@@ -277,18 +277,9 @@ class InMemoryRepository:
         self.geo_outbreak_cache_inference_version = inference_version
         self.geo_outbreak_cache = payload
 
-    def get_geo_outbreak_cache(
-        self,
-        inference_version: str,
-        *,
-        metapop_runs: int | None = None,
-    ) -> dict[str, Any] | None:
+    def get_geo_outbreak_cache(self, inference_version: str) -> dict[str, Any] | None:
         if self.geo_outbreak_cache is None or self.geo_outbreak_cache_inference_version != inference_version:
             return None
-        if metapop_runs is not None:
-            cached_runs = self.geo_outbreak_cache.get("metadata", {}).get("metapop_n_runs")
-            if cached_runs is not None and int(cached_runs) != int(metapop_runs):
-                return None
         return self.geo_outbreak_cache
 
     def update_inference(self, inference: InferenceResult) -> None:
@@ -824,18 +815,9 @@ class SqlRepository:
         self.geo_outbreak_cache_inference_version = inference_version
         self.geo_outbreak_cache = payload
 
-    def get_geo_outbreak_cache(
-        self,
-        inference_version: str,
-        *,
-        metapop_runs: int | None = None,
-    ) -> dict[str, Any] | None:
+    def get_geo_outbreak_cache(self, inference_version: str) -> dict[str, Any] | None:
         if self.geo_outbreak_cache is None or self.geo_outbreak_cache_inference_version != inference_version:
             return None
-        if metapop_runs is not None:
-            cached_runs = self.geo_outbreak_cache.get("metadata", {}).get("metapop_n_runs")
-            if cached_runs is not None and int(cached_runs) != int(metapop_runs):
-                return None
         return self.geo_outbreak_cache
 
     def update_inference(self, inference: InferenceResult) -> None:

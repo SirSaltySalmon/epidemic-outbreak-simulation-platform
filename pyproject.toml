@@ -18,12 +18,6 @@ dependencies = [
     "alembic>=1.13.0",
     "upstash-redis>=1.2.0",
     "python-dotenv>=1.0.0",
-    "numpy>=1.26",
-    "scipy>=1.13",
-    "networkx>=3.2",
-    "numpyro>=0.15.0",
-    "jax[cpu]>=0.4.30",
-    "arviz>=0.18.0",
 ]
 
 [project.optional-dependencies]
@@ -33,6 +27,14 @@ test = [
 ]
 mobility = [
     "pyarrow>=15.0",
+]
+simulation = [
+    "numpy>=1.26",
+    "scipy>=1.13",
+    "networkx>=3.2",
+    "numpyro>=0.15.0",
+    "jax[cpu]>=0.4.30",
+    "arviz>=0.18.0",
 ]
 
 [tool.pytest.ini_options]
@@ -54,6 +56,9 @@ eosp = [
     "data/*.json",
     "data/bundles/*.json",
 ]
+
+[project.scripts]
+eosp-researcher-gui = "eosp.tools.researcher_gui:main"
 
 [tool.vercel]
 # ASGI app lives under the eosp package (app/eosp/main.py), not a default file name.

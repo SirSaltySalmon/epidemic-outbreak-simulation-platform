@@ -20,6 +20,16 @@ python -m uvicorn eosp.main:app --app-dir app --reload
 
 Open `http://127.0.0.1:8000`.
 
+## Local researcher GUI
+
+Run forecasts and case CRUD against `EOSP_DATABASE_URL` from `.env` on this machine (same pipeline as the web Researcher Console, no FastAPI server). After `pip install -e .`:
+
+```powershell
+eosp-researcher-gui
+```
+
+From a checkout without installing the console script, set `PYTHONPATH` to `app` (see pytest config) and run `python -m eosp.tools.researcher_gui`. This process writes inference outputs and forecasts to the configured database; use a development URL unless you intend to update production.
+
 ## Local Persistent Setup
 
 Start local services:

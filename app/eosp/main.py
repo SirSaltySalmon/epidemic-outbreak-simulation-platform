@@ -2,78 +2,23 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import os
 from contextlib import asynccontextmanager
-from typing import Any, AsyncIterator
+from typing import AsyncIterator
 
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
-from sqlalchemy import text
 
 from eosp.api.routes import router
-from eosp.core.db import create_session_factory
+from eosp.core.bootstrap import (
+    build_repository_with_status,
+    create_default_job_manager,
+)
 from eosp.core.models import TriggerType
-from eosp.core.repository import SqlRepository, empty_repository
 from eosp.core.settings import get_settings
-from eosp.services.ensemble import EnsembleConfig
-from eosp.services.inference import InferenceConfig
-from eosp.services.jobs import JobManager
 from eosp.services.network import build_default_network
-from eosp.services.scenarios import SCENARIO_CONFIG
 from eosp.services.who_don_hub_cycle import run_who_don_hub_ingest_cycle
 
 logger = logging.getLogger("eosp.main")
-
-
-def build_repository_with_status() -> tuple[Any, dict[str, Any]]:
-    """Open SqlRepository when Postgres is reachable; else use an empty ephemeral repository."""
-
-    session_factory = create_session_factory()
-    if session_factory is None:
-        logger.warning(
-            "EOSP: EOSP_DATABASE_URL is unset — using an empty in-memory repository; "
-            "no cases, inference traces, or forecasts will be available until data is ingested"
-        )
-        return empty_repository(), {
-            "storage": "memory",
-            "database_configured": False,
-            "database_reachable": None,
-            "detail": "EOSP_DATABASE_URL unset",
-        }
-    try:
-        with session_factory() as session:
-            session.execute(text("select 1"))
-        return SqlRepository(session_factory=session_factory), {
-            "storage": "postgres",
-            "database_configured": True,
-            "database_reachable": True,
-            "detail": None,
-        }
-    except Exception as exc:  # noqa: BLE001
-        logger.warning(
-            "EOSP: database unreachable (%s) — using an empty in-memory repository; "
-            "no persisted cases, inference traces, or forecasts are available",
-            exc,
-        )
-        return empty_repository(), {
-            "storage": "memory",
-            "database_configured": True,
-            "database_reachable": False,
-            "detail": str(exc),
-        }
-
-
-def _ensemble_config() -> EnsembleConfig:
-    n_sims = int(os.environ.get("EOSP_ENSEMBLE_SIMULATIONS", "10000"))
-    return EnsembleConfig(n_simulations=n_sims, n_days=14, parallel=True)
-
-
-def _inference_config() -> InferenceConfig:
-    return InferenceConfig(
-        num_warmup=int(os.environ.get("EOSP_NUTS_WARMUP", "1000")),
-        num_samples=int(os.environ.get("EOSP_NUTS_SAMPLES", "2000")),
-        num_chains=int(os.environ.get("EOSP_NUTS_CHAINS", "4")),
-    )
 
 
 async def _who_don_polling_loop(app: FastAPI) -> None:
@@ -124,15 +69,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.repository = repo
     app.state.db_health = db_health
     app.state.network = build_default_network()
-    job_manager = JobManager(
-        repository=app.state.repository,
-        network=app.state.network,
-        scenarios=SCENARIO_CONFIG,
-        max_workers=2,
-        debounce_seconds=30.0,
-        ensemble_config=_ensemble_config(),
-        inference_config=_inference_config(),
-    )
+    job_manager = create_default_job_manager(app.state.repository)
     app.state.jobs = job_manager
     poll_task: asyncio.Task[None] | None = None
     if get_settings().who_don_poll_enabled:

@@ -75,7 +75,7 @@ def _wait_for_terminal(manager: JobManager, job_id: str):
     raise AssertionError("job did not finish")
 
 
-def test_full_refresh_records_simulation_skipped_after_inference(monkeypatch):
+def test_full_refresh_records_simulation_complete_after_inference(monkeypatch):
     repo = _Repository()
     inference = INFERENCES[0].model_copy(
         update={
@@ -89,6 +89,29 @@ def test_full_refresh_records_simulation_skipped_after_inference(monkeypatch):
         return SimpleNamespace(result=inference, posterior_samples={}, netcdf_path=None)
 
     monkeypatch.setattr("eosp.services.inference.run_inference", fake_run_inference)
+
+    def fake_build_forecast(scen, inf, n_simulations, **kwargs):
+        from datetime import date as ddate
+
+        from eosp.core.models import ForecastPoint, ForecastResponse
+
+        fp = ForecastPoint(
+            day=1,
+            date=ddate(2026, 4, 6),
+            cases_cumulative={"median": 5.0, "ci_95_lower": 4.0, "ci_95_upper": 6.0},
+            cases_new={"median": 1.0, "ci_95_lower": 0.5, "ci_95_upper": 2.0},
+            deaths_cumulative={"median": 0.0, "ci_95_lower": 0.0, "ci_95_upper": 0.5},
+        )
+        return ForecastResponse(
+            scenario=scen,
+            forecast=[fp],
+            metadata={
+                "geo_forecast": {"metadata": {}, "by_day": [{"day": 0, "date": "2026-04-06", "buckets": {}}]},
+                "replay_geo": {"schema_version": "eosp_geo_replay_1", "anchor_date": "2026-04-06", "days": []},
+            },
+        )
+
+    monkeypatch.setattr("eosp.services.forecast.build_forecast", fake_build_forecast)
 
     manager = JobManager(
         repository=repo,
@@ -109,9 +132,9 @@ def test_full_refresh_records_simulation_skipped_after_inference(monkeypatch):
 
     simulation_events = [event for event in events if event.get("stage") == "simulation"]
     assert len(simulation_events) == 1
-    assert simulation_events[0]["status"] == "skipped"
-    assert simulation_events[0].get("reason") == "abm_removed"
-    assert repo.forecasts == {}
+    assert simulation_events[0]["status"] == "complete"
+    assert "baseline" in (simulation_events[0].get("scenarios") or [])
+    assert repo.forecasts.get("baseline") is not None
 
 
 def test_full_refresh_fails_instead_of_falling_back_to_stored_posterior(monkeypatch):

@@ -557,7 +557,25 @@ def test_create_case_persists_and_returns_validation():
     assert validation_response.status_code == 200
 
 
-def test_run_forecast_returns_503_simulator_removed():
+def test_run_forecast_stub_engine_returns_200(monkeypatch):
+    from uuid import uuid4
+
+    from eosp.core.models import ForecastRunItem
+
+    def fake_engine(scenario, inference, n_simulations, **kwargs):
+        fr = _stub_forecast_response(scenario, final_cases=12.0, n_sim=n_simulations)
+        item = ForecastRunItem(
+            forecast_id=uuid4(),
+            scenario=scenario,
+            model_version=inference.version,
+            n_simulations=n_simulations,
+            execution_time_seconds=0.01,
+            cases_day_14={k: float(v) for k, v in fr.forecast[-1].cases_cumulative.items()},
+            deaths_day_14={k: float(v) for k, v in fr.forecast[-1].deaths_cumulative.items()},
+        )
+        return item, fr
+
+    monkeypatch.setattr("eosp.api.routes.run_forecast_engine", fake_engine)
     response = client.post(
         "/api/v1/forecasts/run",
         json={
@@ -566,8 +584,10 @@ def test_run_forecast_returns_503_simulator_removed():
             "n_simulations": 250,
         },
     )
-    assert response.status_code == 503
-    assert "ABM_RETIREMENT" in response.json()["detail"] or "legacy" in response.json()["detail"].lower()
+    assert response.status_code == 200
+    body = response.json()
+    assert body["run_status"] == "completed"
+    assert len(body["forecasts"]) == 2
 
     runs_response = client.get("/api/v1/forecast-runs?limit=5")
     assert runs_response.status_code == 200

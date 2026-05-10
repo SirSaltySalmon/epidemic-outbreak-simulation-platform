@@ -3,6 +3,7 @@ from logging.config import fileConfig
 from alembic import context
 from sqlalchemy import engine_from_config, pool
 
+from eosp.core.db import ensure_psycopg3_driver
 from eosp.core.settings import get_settings
 from eosp.core.tables import Base
 
@@ -15,7 +16,8 @@ target_metadata = Base.metadata
 
 
 def get_url() -> str:
-    return get_settings().database_url or config.get_main_option("sqlalchemy.url")
+    raw = get_settings().database_url or config.get_main_option("sqlalchemy.url")
+    return ensure_psycopg3_driver(raw) if raw else raw
 
 
 def run_migrations_offline() -> None:

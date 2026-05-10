@@ -30,7 +30,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Run EOSP forecast scenarios end-to-end.")
     parser.add_argument(
         "--scenarios",
-        default="baseline,quarantine_immediate,evacuation_delay_7d",
+        default="baseline,terminal_distancing,reduced_travel_connectivity,enhanced_case_isolation",
         help="Comma-separated scenario names.",
     )
     parser.add_argument("--model-version", default="latest")

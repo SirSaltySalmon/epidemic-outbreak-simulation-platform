@@ -6,35 +6,72 @@
 import { get } from "./api.js";
 import { overlayScenario, clearScenarioOverlay } from "./chart.js";
 
-const SCENARIO_META = {
-  baseline: { label: "No Intervention · Baseline", desc: "Full contact network, inferred parameters.", color: "rgb(11,124,131)" },
-  quarantine_immediate: { label: "Immediate Quarantine", desc: "All passengers confined to cabins from day 1.", color: "rgb(47,125,79)" },
-  evacuation_delay_3d: { label: "Evacuation Delayed +3 Days", desc: "Ship stays in place 3 extra days before flights depart.", color: "rgb(185,91,53)" },
-  evacuation_delay_7d: { label: "Evacuation Delayed +7 Days", desc: "Ship stays in place 7 extra days before flights depart.", color: "rgb(185,91,53)" },
-  enhanced_destination_protocols: { label: "Enhanced Arrival Protocols", desc: "All evacuees tested and isolated on arrival; contacts monitored.", color: "rgb(47,125,79)" },
+/** Fallback when bootstrap has no scenario_catalog (e.g. stale static assets). */
+const SCENARIO_META_FALLBACK = {
+  baseline: {
+    label: "Baseline",
+    desc: "No added intervention; reference mobility.",
+    color: "rgb(11,124,131)",
+  },
+  terminal_distancing: {
+    label: "Terminal distancing",
+    desc: "Similar to social distancing in airports and crowded travel settings.",
+    color: "rgb(47,125,79)",
+  },
+  reduced_travel_connectivity: {
+    label: "Restricted travel",
+    desc: "Lighter travel and fewer effective connections.",
+    color: "rgb(185,91,53)",
+  },
+  enhanced_case_isolation: {
+    label: "More effective quarantining",
+    desc: "Stricter isolation when cases are identified.",
+    color: "rgb(47,125,79)",
+  },
 };
 
 /** Same order as the dashboard compare request — single source of truth. */
 export const DEFAULT_COMPARE_SCENARIOS = [
   "baseline",
-  "quarantine_immediate",
-  "evacuation_delay_7d",
-  "enhanced_destination_protocols",
+  "terminal_distancing",
+  "reduced_travel_connectivity",
+  "enhanced_case_isolation",
 ];
 
 export const SCENARIOS_COMPARE_QUERY =
   "scenarios=" + DEFAULT_COMPARE_SCENARIOS.join(",");
 
+/**
+ * @param {any[]|null|undefined} catalog from GET /dashboard/bootstrap scenario_catalog
+ * @returns {Record<string, { label: string, desc: string, color: string }>|null}
+ */
+export function scenarioMetaFromCatalog(catalog) {
+  if (!catalog || !Array.isArray(catalog)) return null;
+  /** @type {Record<string, { label: string, desc: string, color: string }>} */
+  const o = {};
+  for (const r of catalog) {
+    if (!r?.id) continue;
+    o[r.id] = {
+      label: r.public_label || String(r.id).replace(/_/g, " "),
+      desc: r.similar_to || r.description || "",
+      color: r.ui_color || "rgb(11,124,131)",
+    };
+  }
+  return Object.keys(o).length ? o : null;
+}
+
 let _activeScenario = null;
 
 /**
  * @param {object|null} comparison - API payload, or null when the compare request failed
- * @param {{ fetchError?: string }} [opts]
+ * @param {{ fetchError?: string, catalogMeta?: Record<string, { label: string, desc: string, color: string }>|null }} [opts]
  */
 export function renderScenarios(comparison, opts = {}) {
   const container = document.getElementById("scenario-sidebar");
   if (!container) return;
   container.innerHTML = "";
+
+  const metaByName = opts.catalogMeta || SCENARIO_META_FALLBACK;
 
   if (opts.fetchError) {
     const banner = document.createElement("p");
@@ -45,16 +82,21 @@ export function renderScenarios(comparison, opts = {}) {
 
   const byName = comparison
     ? Object.fromEntries(comparison.scenarios.map((s) => [s.name, s]))
-    : {};
+    : /** @type {Record<string, any>} */ ({});
   const unavailable = new Set(comparison?.scenarios_unavailable || []);
 
   for (const name of DEFAULT_COMPARE_SCENARIOS) {
     const s = byName[name];
     const locked = !s || unavailable.has(name) || opts.fetchError;
     if (s && !unavailable.has(name) && !opts.fetchError) {
-      _appendInteractiveCard(container, s);
+      _appendInteractiveCard(container, s, metaByName);
     } else {
-      _appendLockedCard(container, name, locked && !opts.fetchError ? "No simulation result yet. Run a forecast from Console for this scenario." : null);
+      _appendLockedCard(
+        container,
+        name,
+        metaByName,
+        locked && !opts.fetchError ? "No simulation result yet. Run a forecast from Console for this scenario." : null,
+      );
     }
   }
 
@@ -68,8 +110,15 @@ export function renderScenarios(comparison, opts = {}) {
   container.appendChild(customCard);
 }
 
-function _appendInteractiveCard(container, s) {
-  const meta = SCENARIO_META[s.name] || { label: s.name.replace(/_/g, " "), desc: "", color: "rgb(11,124,131)" };
+/**
+ * @param {Record<string, { label: string, desc: string, color: string }>} metaByName
+ */
+function _appendInteractiveCard(container, s, metaByName) {
+  const meta = metaByName[s.name] || {
+    label: s.name.replace(/_/g, " "),
+    desc: "",
+    color: "rgb(11,124,131)",
+  };
   const isBaseline = s.name === "baseline";
   const delta = s.vs_baseline;
 
@@ -103,8 +152,15 @@ function _appendInteractiveCard(container, s) {
   container.appendChild(card);
 }
 
-function _appendLockedCard(container, name, subtitle) {
-  const meta = SCENARIO_META[name] || { label: name.replace(/_/g, " "), desc: "", color: "rgb(11,124,131)" };
+/**
+ * @param {Record<string, { label: string, desc: string, color: string }>} metaByName
+ */
+function _appendLockedCard(container, name, metaByName, subtitle) {
+  const meta = metaByName[name] || {
+    label: name.replace(/_/g, " "),
+    desc: "",
+    color: "rgb(11,124,131)",
+  };
   const card = document.createElement("div");
   card.className = "scenario-card locked";
   card.dataset.scenario = name;

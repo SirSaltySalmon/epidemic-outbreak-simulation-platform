@@ -148,29 +148,37 @@ def _draw_parameter_samples(
 ) -> dict[str, np.ndarray]:
     rng = np.random.default_rng(rng_seed)
     if posterior_samples is not None:
-        return _resample_posterior(posterior_samples, n_simulations, rng, scenario_params)
+        return _resample_posterior(
+            posterior_samples, n_simulations, rng, scenario_params, inference,
+        )
 
     samples: dict[str, np.ndarray] = {}
     samples["p_transmit"] = _truncated_normal(
         rng, mean=float(scenario_params.get("p_transmit", inference.parameters["p_transmit"].mean)),
         std=float(inference.parameters["p_transmit"].std), low=0.0, high=1.0, size=n_simulations,
     )
+    cd_mean = float(scenario_params.get("contacts_daily", inference.parameters["contacts_daily"].mean))
     samples["contacts_daily"] = _truncated_normal(
-        rng, mean=float(inference.parameters["contacts_daily"].mean),
+        rng, mean=cd_mean,
         std=float(inference.parameters["contacts_daily"].std), low=0.0, high=20.0, size=n_simulations,
     )
+    inc_mean = _incubation_mean_for_draw(scenario_params, inference)
+    inc_std = float(inference.parameters["incubation"].std) if "incubation" in inference.parameters else 1.0
     samples["incubation_mean"] = _truncated_normal(
-        rng, mean=float(inference.parameters["incubation"].mean),
-        std=float(inference.parameters["incubation"].std), low=1.0, high=30.0, size=n_simulations,
+        rng, mean=inc_mean, std=inc_std, low=1.0, high=30.0, size=n_simulations,
     )
+    h2h_mean = _h2h_mean_for_draw(scenario_params, inference)
+    h2h_std = float(inference.parameters["h2h_multiplier"].std) if "h2h_multiplier" in inference.parameters else 0.3
     samples["h2h_multiplier"] = _truncated_normal(
-        rng, mean=float(inference.parameters.get("h2h_multiplier", inference.parameters["p_transmit"]).mean if "h2h_multiplier" in inference.parameters else 1.0),
-        std=float(inference.parameters["h2h_multiplier"].std) if "h2h_multiplier" in inference.parameters else 0.3,
+        rng, mean=h2h_mean,
+        std=h2h_std,
         low=0.1, high=5.0, size=n_simulations,
     )
+    cfr_mean = _cfr_mean_for_draw(scenario_params, inference)
+    cfr_std = float(inference.parameters["cfr"].std) if "cfr" in inference.parameters else 0.05
     samples["cfr"] = _truncated_normal(
-        rng, mean=float(inference.parameters["cfr"].mean) if "cfr" in inference.parameters else 0.40,
-        std=float(inference.parameters["cfr"].std) if "cfr" in inference.parameters else 0.05,
+        rng, mean=cfr_mean,
+        std=cfr_std,
         low=0.05, high=0.85, size=n_simulations,
     )
     return samples
@@ -189,12 +197,78 @@ _DEFAULT_ABM_VALUES = {
     "cfr": 0.40,
 }
 
+_ABM_CLIP = {
+    "p_transmit": (0.0, 1.0),
+    "contacts_daily": (0.0, 20.0),
+    "incubation_mean": (1.0, 30.0),
+    "h2h_multiplier": (0.1, 5.0),
+    "cfr": (0.05, 0.85),
+}
+
+
+def _incubation_mean_for_draw(scenario_params: Mapping[str, float], inference: InferenceResult) -> float:
+    if "incubation_mean" in scenario_params:
+        return float(scenario_params["incubation_mean"])
+    if "incubation" in scenario_params:
+        return float(scenario_params["incubation"])
+    if "incubation" in inference.parameters:
+        return float(inference.parameters["incubation"].mean)
+    return _DEFAULT_ABM_VALUES["incubation_mean"]
+
+
+def _h2h_mean_for_draw(scenario_params: Mapping[str, float], inference: InferenceResult) -> float:
+    if "h2h_multiplier" in scenario_params:
+        return float(scenario_params["h2h_multiplier"])
+    if "h2h_multiplier" in inference.parameters:
+        return float(inference.parameters["h2h_multiplier"].mean)
+    return _DEFAULT_ABM_VALUES["h2h_multiplier"]
+
+
+def _cfr_mean_for_draw(scenario_params: Mapping[str, float], inference: InferenceResult) -> float:
+    if "cfr" in scenario_params:
+        return float(scenario_params["cfr"])
+    if "cfr" in inference.parameters:
+        return float(inference.parameters["cfr"].mean)
+    return _DEFAULT_ABM_VALUES["cfr"]
+
+
+def _align_drawn_means(drawn: dict[str, np.ndarray], scenario_params: Mapping[str, float], inference: InferenceResult) -> None:
+    """Scale each parameter vector so its mean matches scenario_params (post apply_to_parameters)."""
+    targets = {
+        "p_transmit": float(
+            scenario_params.get(
+                "p_transmit",
+                float(np.mean(drawn["p_transmit"])) if drawn["p_transmit"].size else _DEFAULT_ABM_VALUES["p_transmit"],
+            )
+        ),
+        "contacts_daily": float(
+            scenario_params.get(
+                "contacts_daily",
+                float(np.mean(drawn["contacts_daily"])) if drawn["contacts_daily"].size else _DEFAULT_ABM_VALUES["contacts_daily"],
+            )
+        ),
+        "incubation_mean": _incubation_mean_for_draw(scenario_params, inference),
+        "h2h_multiplier": _h2h_mean_for_draw(scenario_params, inference),
+        "cfr": _cfr_mean_for_draw(scenario_params, inference),
+    }
+    low_high = _ABM_CLIP
+    for key, target in targets.items():
+        arr = drawn[key]
+        if arr.size == 0:
+            continue
+        m = float(np.mean(arr))
+        lo, hi = low_high[key]
+        if m > 1e-12 and abs(m - target) > 1e-12:
+            arr = arr * (target / m)
+        drawn[key] = np.clip(arr, lo, hi)
+
 
 def _resample_posterior(
     posterior_samples: Mapping[str, np.ndarray],
     n_simulations: int,
     rng: np.random.Generator,
     scenario_params: Mapping[str, float],
+    inference: InferenceResult,
 ) -> dict[str, np.ndarray]:
     base_length = len(next(iter(posterior_samples.values())))
     indices = rng.integers(0, base_length, size=n_simulations)
@@ -205,8 +279,7 @@ def _resample_posterior(
     for key in _REQUIRED_ABM_KEYS:
         if key not in drawn:
             drawn[key] = np.full(n_simulations, _DEFAULT_ABM_VALUES[key], dtype=float)
-    if "p_transmit_scale" in scenario_params and scenario_params["p_transmit_scale"] != 1.0:
-        drawn["p_transmit"] = drawn["p_transmit"] * float(scenario_params["p_transmit_scale"])
+    _align_drawn_means(drawn, scenario_params, inference)
     return drawn
 
 

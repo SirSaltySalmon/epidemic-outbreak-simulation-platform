@@ -368,12 +368,30 @@ def test_forecast_metadata_geo_buckets_from_abm():
 
 
 def test_scenario_comparison_reports_baseline_delta():
-    _run_forecasts("baseline", "quarantine_immediate")
-    response = client.get("/api/v1/scenarios/compare?scenarios=baseline,quarantine_immediate")
+    _run_forecasts("baseline", "terminal_distancing")
+    response = client.get("/api/v1/scenarios/compare?scenarios=baseline,terminal_distancing")
     assert response.status_code == 200
     scenarios = response.json()["scenarios"]
     assert scenarios[0]["vs_baseline"] is None
     assert scenarios[1]["vs_baseline"]["case_change_pct"] <= 0
+
+
+def test_dashboard_bootstrap_includes_scenario_catalog():
+    response = client.get("/api/v1/dashboard/bootstrap")
+    assert response.status_code == 200
+    body = response.json()
+    cat = body.get("scenario_catalog")
+    assert isinstance(cat, list) and len(cat) == 4
+    ids = [x["id"] for x in cat]
+    assert ids == [
+        "baseline",
+        "terminal_distancing",
+        "reduced_travel_connectivity",
+        "enhanced_case_isolation",
+    ]
+    for row in cat:
+        assert row.get("public_label")
+        assert "technical_explanation" in row
 
 
 def test_validation_endpoint_for_case():
@@ -465,7 +483,7 @@ def test_run_forecast_engine_persists_results():
     response = client.post(
         "/api/v1/forecasts/run",
         json={
-            "scenarios": ["baseline", "quarantine_immediate"],
+            "scenarios": ["baseline", "terminal_distancing"],
             "model_version": "latest",
             "n_simulations": 250,
         },
@@ -500,16 +518,16 @@ def test_scenario_compare_partial_when_scenario_missing_from_cache():
     repo = getattr(app.state, "repository", None)
     if repo is None or not hasattr(repo, "forecast_cache"):
         pytest.skip("partial compare test requires in-memory forecast_cache")
-    repo.forecast_cache.pop("quarantine_immediate", None)
-    response = client.get("/api/v1/scenarios/compare?scenarios=baseline,quarantine_immediate")
+    repo.forecast_cache.pop("terminal_distancing", None)
+    response = client.get("/api/v1/scenarios/compare?scenarios=baseline,terminal_distancing")
     assert response.status_code == 200
     body = response.json()
     names = [s["name"] for s in body["scenarios"]]
     assert names == ["baseline"]
-    assert "quarantine_immediate" in body.get("scenarios_unavailable", [])
+    assert "terminal_distancing" in body.get("scenarios_unavailable", [])
 
 
 def test_scenario_compare_returns_503_when_cache_empty():
     _clear_forecast_cache_everywhere()
-    response = client.get("/api/v1/scenarios/compare?scenarios=baseline,quarantine_immediate")
+    response = client.get("/api/v1/scenarios/compare?scenarios=baseline,terminal_distancing")
     assert response.status_code == 503

@@ -216,6 +216,9 @@
           <p><strong>Inference vs. initial conditions.</strong> Bayesian posteriors supply transmission and disease parameters (e.g. transmissibility, contact intensity, incubation, severity). Initial exposed / infectious / recovered / deceased counts are allocated from aggregated case records onto the cohort. When raw totals exceed the cohort size, counts are scaled proportionally with largest-remainder integer rounding; metadata may include <code>seed_scaling</code>. This is not an independent draw of “sick or well” for every agent from the posterior.</p>
           <p><strong>Scenarios.</strong> Scenario specs adjust parameters and network modifiers before ensembles are run; comparison responses are derived from cached forecasts per scenario.</p>
           <p><strong>Provenance.</strong> Flight baseline snapshots hash canonical JSON and may incorporate a SHA-256 of the routes file. OpenFlights derivatives are ODbL—see project README for attribution when publishing graphs or downstream datasets.</p>
+          <h4 class="model-technical-subheading" id="scenario-explanations-heading">Scenario Explanations</h4>
+          <div id="scenario-explanations-root" class="scenario-explanations-root" aria-live="polite" hidden></div>
+          <p id="scenario-explanations-fallback" class="scenario-explanations-fallback">Scenario technical details load with the dashboard.</p>
         </div>
       </div>
     </section>

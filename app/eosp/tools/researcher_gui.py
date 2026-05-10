@@ -55,10 +55,9 @@ from eosp.services.scenarios import SCENARIO_CONFIG
 
 _SCENARIO_ORDER_LABELS: list[tuple[str, str]] = [
     ("baseline", "Baseline"),
-    ("quarantine_immediate", "Quarantine Now"),
-    ("evacuation_delay_3d", "Delay +3d"),
-    ("evacuation_delay_7d", "Delay +7d"),
-    ("enhanced_destination_protocols", "Enhanced Protocols"),
+    ("terminal_distancing", "Terminal distancing"),
+    ("reduced_travel_connectivity", "Restricted travel"),
+    ("enhanced_case_isolation", "More effective quarantining"),
 ]
 
 _FIDELITY_OPTIONS: tuple[tuple[int, str], ...] = (
@@ -69,7 +68,13 @@ _FIDELITY_OPTIONS: tuple[tuple[int, str], ...] = (
 
 
 def _scenario_rows_for_gui() -> list[tuple[str, str]]:
-    return [(sid, label) for sid, label in _SCENARIO_ORDER_LABELS if sid in SCENARIO_CONFIG]
+    rows: list[tuple[str, str]] = []
+    for sid, fallback in _SCENARIO_ORDER_LABELS:
+        if sid not in SCENARIO_CONFIG:
+            continue
+        spec = SCENARIO_CONFIG[sid]
+        rows.append((sid, spec.public_label or fallback))
+    return rows
 
 
 def _parse_date_opt(value: str) -> date | None:

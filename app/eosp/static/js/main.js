@@ -5,7 +5,7 @@
 import { get } from "./api.js";
 import { initMap, renderGeoData } from "./map.js";
 import { renderForecast, purgeForecastChart } from "./chart.js";
-import { renderScenarios, SCENARIOS_COMPARE_QUERY } from "./scenarios.js";
+import { renderScenarios, SCENARIOS_COMPARE_QUERY, scenarioMetaFromCatalog } from "./scenarios.js";
 import { initAuth } from "./auth.js";
 import { initDrawer, notifyDrawerOpened } from "./drawer.js";
 import { applyCasesList } from "./cases.js";
@@ -32,8 +32,47 @@ async function boot() {
   _wireDrawerToggle();
 }
 
+/** @param {any[]|undefined} catalog */
+function _hydrateScenarioExplanations(catalog) {
+  const root = document.getElementById("scenario-explanations-root");
+  const fb = document.getElementById("scenario-explanations-fallback");
+  if (!root || !fb) return;
+  if (!catalog || !catalog.length) {
+    root.innerHTML = "";
+    root.hidden = true;
+    fb.hidden = false;
+    return;
+  }
+  root.innerHTML = "";
+  for (const r of catalog) {
+    if (!r?.id) continue;
+    const block = document.createElement("div");
+    block.className = "scenario-explain-block";
+    const h = document.createElement("p");
+    h.className = "scenario-explain-title";
+    h.textContent = r.public_label || r.id;
+    block.appendChild(h);
+    if (r.similar_to) {
+      const s = document.createElement("p");
+      s.className = "scenario-explain-similar";
+      s.textContent = r.similar_to;
+      block.appendChild(s);
+    }
+    const t = document.createElement("p");
+    t.className = "scenario-explain-tech";
+    t.textContent = r.technical_explanation || "";
+    block.appendChild(t);
+    root.appendChild(block);
+  }
+  fb.hidden = true;
+  root.hidden = false;
+}
+
 /** @param {any} data — JSON from ``GET /api/v1/dashboard/bootstrap`` */
 function _applyDashboardBundle(data) {
+  _hydrateScenarioExplanations(data.scenario_catalog);
+  const catalogMeta = scenarioMetaFromCatalog(data.scenario_catalog);
+
   if (data.summary) {
     _applySummaryKpis(data.summary);
     setInterval(async () => {
@@ -75,9 +114,12 @@ function _applyDashboardBundle(data) {
 
   const errScenarios = data.errors?.scenarios;
   if (data.scenarios && !errScenarios) {
-    renderScenarios(data.scenarios);
+    renderScenarios(data.scenarios, { catalogMeta });
   } else {
-    renderScenarios(null, { fetchError: errScenarios || "Scenario compare unavailable." });
+    renderScenarios(null, {
+      fetchError: errScenarios || "Scenario compare unavailable.",
+      catalogMeta,
+    });
   }
 
   applyCasesList(Array.isArray(data.cases) ? data.cases : []);
@@ -86,6 +128,8 @@ function _applyDashboardBundle(data) {
 function _onRunComplete() {
   get(_DASHBOARD_BOOTSTRAP, { cache: "no-store" })
     .then((data) => {
+      _hydrateScenarioExplanations(data.scenario_catalog);
+      const catalogMeta = scenarioMetaFromCatalog(data.scenario_catalog);
       if (data.summary) {
         _applySummaryKpis(data.summary);
       }
@@ -105,9 +149,12 @@ function _onRunComplete() {
       }
       const errScenarios = data.errors?.scenarios;
       if (data.scenarios && !errScenarios) {
-        renderScenarios(data.scenarios);
+        renderScenarios(data.scenarios, { catalogMeta });
       } else {
-        renderScenarios(null, { fetchError: errScenarios || "Scenario compare unavailable." });
+        renderScenarios(null, {
+          fetchError: errScenarios || "Scenario compare unavailable.",
+          catalogMeta,
+        });
       }
       if (data.geo) {
         const gf = data.forecast_baseline?.metadata?.geo_forecast ?? null;

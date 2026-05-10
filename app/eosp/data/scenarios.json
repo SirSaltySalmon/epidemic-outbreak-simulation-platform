@@ -1,63 +1,51 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "scenarios": [
     {
       "name": "baseline",
-      "description": "No interventions. Full ship + flight + destination network with inferred parameters.",
-      "network_modifications": {
-        "remove_edges": [],
-        "modify_weights": {},
-        "add_isolation": []
-      },
-      "parameter_overrides": {}
+      "public_label": "Baseline",
+      "similar_to": "No added intervention; reference mobility.",
+      "description": "No scenario overlays: inferred transmission parameters and default hub itinerary mixing (Track B).",
+      "technical_explanation": "parameter_overrides is empty. network_modifications is empty so apply_modifications leaves ContactNetwork unchanged: itinerary_patch_weight and itinerary_flight_weight stay 1.0 from build_world_contact_network. Ensemble draws p_transmit, contacts_daily, incubation, h2h_multiplier, and cfr from the inferred posterior summaries (or raw posterior samples when provided), then runs the ABM with patch co-location exposure (contacts_daily enters as mix = contacts_daily / 24 on patch pressure).",
+      "network_modifications": {},
+      "parameter_overrides": {},
+      "ui_color": "rgb(11,124,131)"
     },
     {
-      "name": "quarantine_immediate",
-      "description": "All ship passengers isolated in cabins from day 1; only household contacts retained.",
+      "name": "terminal_distancing",
+      "public_label": "Terminal distancing",
+      "similar_to": "Social distancing in airports and crowded travel settings.",
+      "description": "Weaker effective mixing when people share the same airport patch (same movement paths as baseline).",
+      "technical_explanation": "network_modifications.modify_weights.itinerary_patch scales ContactNetwork.itinerary_patch_weight in apply_modifications (multiplier below 1). The ABM uses pw = itinerary_patch_weight when agents are grouped by patch (default world has itinerary_contact_patch; flight groups are zero). p_transmit and contacts_daily are unchanged from inference. Same Markov itinerary as baseline.",
       "network_modifications": {
-        "remove_edges": ["social", "transient", "workplace"],
-        "modify_weights": {"flight": 0.4, "household": 0.7},
-        "add_isolation": []
+        "modify_weights": { "itinerary_patch": 0.62 }
       },
-      "parameter_overrides": {
-        "p_transmit_scale": 0.10
-      }
+      "parameter_overrides": {},
+      "ui_color": "rgb(47,125,79)"
     },
     {
-      "name": "evacuation_delay_3d",
-      "description": "Ship remains in place for 3 extra days before evacuation; transmission continues.",
-      "network_modifications": {
-        "remove_edges": [],
-        "modify_weights": {"social": 0.55, "transient": 0.10},
-        "add_isolation": []
-      },
+      "name": "reduced_travel_connectivity",
+      "public_label": "Restricted travel",
+      "similar_to": "Lighter travel and fewer effective connections.",
+      "description": "Lower effective daily contact intensity while keeping the same hub cohort and itinerary matrix.",
+      "technical_explanation": "parameter_overrides.contacts_daily sets a lower mean for the Monte Carlo draws (ensemble._draw_parameter_samples uses scenario_params; posterior resampling gets mean alignment via _align_drawn_means). In abm.simulate_trajectory, contacts_daily scales exposure through mix = contacts_daily / 24 applied to patch pressure. itinerary_patch_weight unchanged unless you add itinerary_patch in JSON.",
+      "network_modifications": {},
       "parameter_overrides": {
-        "evacuation_delay_days": 3
-      }
+        "contacts_daily": 1.75
+      },
+      "ui_color": "rgb(185,91,53)"
     },
     {
-      "name": "evacuation_delay_7d",
-      "description": "Ship remains in place for 7 extra days before evacuation; transmission continues.",
-      "network_modifications": {
-        "remove_edges": [],
-        "modify_weights": {"social": 0.6, "transient": 0.15},
-        "add_isolation": []
-      },
+      "name": "enhanced_case_isolation",
+      "public_label": "More effective quarantining",
+      "similar_to": "Stricter isolation when cases are identified.",
+      "description": "Lower per-contact transmission given the same mixing (faster finding and separation of infectious individuals).",
+      "technical_explanation": "parameter_overrides.p_transmit_scale multiplies baseline p_transmit in ScenarioSpec.apply_to_parameters before sampling. Ensemble uses the adjusted mean for truncated normals or aligns posterior draws to scenario_params.p_transmit. Network weights unchanged.",
+      "network_modifications": {},
       "parameter_overrides": {
-        "evacuation_delay_days": 7
-      }
-    },
-    {
-      "name": "enhanced_destination_protocols",
-      "description": "All evacuees tested + isolated upon arrival; destination contacts effectively contained.",
-      "network_modifications": {
-        "remove_edges": [],
-        "modify_weights": {"hospital": 0.05, "family": 0.05},
-        "add_isolation": []
+        "p_transmit_scale": 0.45
       },
-      "parameter_overrides": {
-        "p_transmit_scale": 0.85
-      }
+      "ui_color": "rgb(47,125,79)"
     }
   ]
 }

@@ -8,11 +8,10 @@ import { subscribe } from "./jobs.js";
 import { markResearchConsoleCaseDataUpdated } from "./topbar-updated.js";
 
 const SCENARIOS = [
-  { id: "baseline",                      label: "Baseline" },
-  { id: "quarantine_immediate",          label: "Quarantine Now" },
-  { id: "evacuation_delay_3d",           label: "Delay +3d" },
-  { id: "evacuation_delay_7d",           label: "Delay +7d" },
-  { id: "enhanced_destination_protocols", label: "Enhanced Protocols" },
+  { id: "baseline", label: "Baseline" },
+  { id: "terminal_distancing", label: "Terminal distancing" },
+  { id: "reduced_travel_connectivity", label: "Restricted travel" },
+  { id: "enhanced_case_isolation", label: "More effective quarantining" },
 ];
 const FIDELITY = [
   { value: 100,   label: "100 (fast preview)" },

@@ -22,6 +22,10 @@ class ScenarioSpec:
     description: str = ""
     network_modifications: dict[str, Any] = field(default_factory=dict)
     parameter_overrides: dict[str, Any] = field(default_factory=dict)
+    public_label: str = ""
+    similar_to: str = ""
+    technical_explanation: str = ""
+    ui_color: str = ""
 
     def applied_to(self, network: ContactNetwork) -> ContactNetwork:
         if not self.network_modifications:
@@ -53,17 +57,40 @@ def load_scenarios(path: Path | str | None = None) -> dict[str, ScenarioSpec]:
     payload = json.loads((Path(path) if path else _default_path()).read_text(encoding="utf-8"))
     scenarios: dict[str, ScenarioSpec] = {}
     for entry in payload["scenarios"]:
+        nm = entry["name"]
         spec = ScenarioSpec(
-            name=entry["name"],
+            name=nm,
             description=entry.get("description", ""),
             network_modifications=entry.get("network_modifications", {}) or {},
             parameter_overrides=entry.get("parameter_overrides", {}) or {},
+            public_label=entry.get("public_label") or nm.replace("_", " ").title(),
+            similar_to=entry.get("similar_to", ""),
+            technical_explanation=entry.get("technical_explanation", ""),
+            ui_color=entry.get("ui_color", ""),
         )
         scenarios[spec.name] = spec
     return scenarios
 
 
 SCENARIO_CONFIG: dict[str, ScenarioSpec] = load_scenarios()
+
+
+def scenario_catalog_for_api() -> list[dict[str, str | None]]:
+    """Ordered catalog for dashboard bootstrap (insertion order matches scenarios.json)."""
+
+    out: list[dict[str, str | None]] = []
+    for spec in SCENARIO_CONFIG.values():
+        out.append(
+            {
+                "id": spec.name,
+                "description": spec.description,
+                "public_label": spec.public_label,
+                "similar_to": spec.similar_to,
+                "technical_explanation": spec.technical_explanation,
+                "ui_color": spec.ui_color or None,
+            }
+        )
+    return out
 
 
 def get_scenario(name: str) -> ScenarioSpec:

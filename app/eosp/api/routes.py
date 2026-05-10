@@ -26,7 +26,7 @@ from eosp.services.forecast import (
     get_cached_forecast,
     run_forecast_engine,
 )
-from eosp.services.scenarios import SCENARIO_CONFIG
+from eosp.services.scenarios import SCENARIO_CONFIG, scenario_catalog_for_api
 from eosp.services.geo import build_geo_bundle, build_outbreak_geo
 from eosp.services.reference_geo import airports_for_api, countries_for_api
 
@@ -207,12 +207,15 @@ def health(request: Request) -> dict[str, object]:
     return payload
 
 
+_DEFAULT_BOOTSTRAP_SCENARIOS = "baseline,terminal_distancing,reduced_travel_connectivity,enhanced_case_isolation"
+
+
 @router.get("/dashboard/bootstrap")
 def dashboard_bootstrap(
     request: Request,
     http_response: Response,
     scenarios: str = Query(
-        default="baseline,quarantine_immediate,evacuation_delay_7d,enhanced_destination_protocols",
+        default=_DEFAULT_BOOTSTRAP_SCENARIOS,
     ),
     version_limit: int = Query(default=2, ge=1, le=50),
     risk_model: str | None = Query(default=None),
@@ -281,6 +284,7 @@ def dashboard_bootstrap(
         "forecast_baseline_prev": forecast_prev.model_dump(mode="json") if forecast_prev else None,
         "versions": {"versions": version_dicts},
         "scenarios": scenarios_payload.model_dump(mode="json") if scenarios_payload else None,
+        "scenario_catalog": scenario_catalog_for_api(),
         "errors": errors,
     }
 
@@ -728,7 +732,7 @@ def hindcast_accuracy(model_version: str = "latest"):
 def scenario_comparison(
     request: Request,
     http_response: Response,
-    scenarios: str = "baseline,quarantine_immediate,evacuation_delay_7d",
+    scenarios: str = _DEFAULT_BOOTSTRAP_SCENARIOS,
 ):
     http_response.headers["Cache-Control"] = _CACHE_DASHBOARD_AGGREGATE
     scenario_names = [name.strip() for name in scenarios.split(",") if name.strip()]

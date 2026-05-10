@@ -22,6 +22,7 @@ from eosp.core.models import (
 )
 from eosp.services.forecast import (
     ForecastNotCachedError,
+    SimulatorRemovedError,
     compare_scenarios,
     get_cached_forecast,
     run_forecast_engine,
@@ -514,6 +515,11 @@ def run_forecasts(
                 inference=inference,
                 n_simulations=payload.n_simulations,
             )
+        except SimulatorRemovedError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail=str(exc),
+            ) from exc
         except (ImportError, ModuleNotFoundError) as exc:
             raise HTTPException(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,

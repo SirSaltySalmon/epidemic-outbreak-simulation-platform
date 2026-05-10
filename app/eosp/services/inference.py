@@ -68,7 +68,7 @@ def daily_onsets_from_cases(cases: Iterable[CaseRecord], start_date: date, n_day
 def run_inference(
     *,
     cases: list[CaseRecord],
-    network: ContactNetwork,
+    network: ContactNetwork | None = None,
     config: InferenceConfig | None = None,
     trigger: TriggerType = TriggerType.MANUAL,
     start_date: date | None = None,
@@ -81,6 +81,10 @@ def run_inference(
     ``previous_inference`` is currently used only to derive informative-prior
     centers in the next call (FR-2.1 step 3); the priors below stay weakly
     informative on the first run.
+
+    Supply ``InferenceConfig.network_summary`` (e.g. ``mean_weighted_degree``) to
+    run without a :class:`~eosp.services.network.ContactNetwork`; otherwise pass
+    ``network`` so NUTS can call ``degree_summary()``.
     """
 
     config = config or InferenceConfig()
@@ -92,7 +96,15 @@ def run_inference(
     start = start_date or inferred_start
     counts = daily_onsets_from_cases(sorted_cases, start, n_days)
 
-    network_summary = network.degree_summary()
+    if config.network_summary is not None:
+        network_summary = dict(config.network_summary)
+    elif network is not None:
+        network_summary = network.degree_summary()
+    else:
+        raise ValueError(
+            "run_inference requires a ContactNetwork, or set InferenceConfig.network_summary "
+            "(e.g. mean_weighted_degree) to run without building the itinerary graph."
+        )
     posterior_samples = _run_nuts(counts=counts, network_summary=network_summary, config=config)
 
     parameter_estimates = _summarize(posterior_samples)

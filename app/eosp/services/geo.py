@@ -13,7 +13,6 @@ and ``errors`` explains why — there is no live flight-network API on this path
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from datetime import UTC, datetime
 
 from eosp.core.models import CaseRecord, CaseStatus, ObservationKind
 from eosp.services.patch_codes import iata_from_destination

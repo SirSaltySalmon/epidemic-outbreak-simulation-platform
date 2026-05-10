@@ -30,3 +30,6 @@ class InferenceConfig:
     rng_seed: int = 20260507
     persist_netcdf: bool = True
     posteriors_dir: Path | None = None
+    #: When set, :func:`run_inference` uses this instead of ``network.degree_summary()``
+    #: so callers can skip building a :class:`~eosp.services.network.ContactNetwork`.
+    network_summary: dict[str, float] | None = None

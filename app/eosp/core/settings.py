@@ -33,6 +33,13 @@ class Settings(BaseSettings):
     # Required on direct HTTP calls to api.clerk.com (see Clerk versioning docs).
     clerk_backend_api_version: str = "2025-04-10"
 
+    #: When set, hub cohort agent count in :func:`build_world_contact_network` uses this
+    #: instead of summing baseline flight ``n_passengers`` (overrides spawn ship block).
+    cohort_population_override: int | None = None
+    #: Line-list seeding: persons with onset at least this many days before the forecast
+    #: anchor date are placed in **R**; more recent onsets in **I**. No hidden multipliers.
+    seed_still_infectious_within_days: int = 10
+
     model_config = SettingsConfigDict(env_file=".env", env_prefix="EOSP_", extra="ignore")
 
 

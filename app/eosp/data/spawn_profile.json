@@ -1,8 +1,9 @@
 {
   "schema_version": 1,
-  "description": "Routing priors for hub contact-cohort ABM. Ship block is UI/narrative only—not used for agent counts.",
+  "description": "Routing priors for hub contact-cohort ABM. When use_ship_population_for_cohort is true, passengers+crew size the model cohort (default 147).",
   "domestic_continuation_bias": 0.4,
   "contact_cohort_only": true,
+  "use_ship_population_for_cohort": true,
   "ship": {
     "name": "MV Hondius",
     "n_passengers": 117,

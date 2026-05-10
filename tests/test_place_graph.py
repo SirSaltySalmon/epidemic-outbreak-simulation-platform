@@ -5,7 +5,7 @@ from eosp.services.schedule_baseline import load_baseline_schedule
 
 def test_default_world_has_eighty_hub_agents_empty_layers():
     net = build_default_network()
-    assert net.n_agents == 80
+    assert net.n_agents == 147
     assert net.layers == []
 
 

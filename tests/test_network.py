@@ -49,7 +49,7 @@ _MINI_LEGACY_SPEC: dict = {
 
 def test_default_network_is_hub_itinerary_cohort():
     network = build_default_network()
-    assert network.n_agents == 80
+    assert network.n_agents == 147
     assert network.ship_node_indices() == []
     assert network.layers == []
     assert network.itinerary_contact_patch is not None

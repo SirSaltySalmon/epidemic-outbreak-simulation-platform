@@ -1,9 +1,9 @@
-from datetime import UTC, date, datetime
+from datetime import UTC, datetime
 from time import monotonic, sleep
 from types import SimpleNamespace
 from typing import Any
 
-from eosp.core.models import ForecastPoint, ForecastResponse, InferenceResult, TriggerType
+from eosp.core.models import ForecastResponse, InferenceResult, TriggerType
 from eosp.core.seed_data import CASES, INFERENCES
 from eosp.services.jobs import JobManager
 from eosp.services.scenarios import SCENARIO_CONFIG
@@ -65,22 +65,6 @@ class _Repository:
         return self.geo_cache
 
 
-def _forecast(scenario: str, version: str, n_simulations: int) -> ForecastResponse:
-    return ForecastResponse(
-        scenario=scenario,
-        forecast=[
-            ForecastPoint(
-                day=1,
-                date=date(2026, 5, 7),
-                cases_cumulative={"median": 1.0, "ci_95_lower": 1.0, "ci_95_upper": 1.0},
-                cases_new={"median": 1.0, "ci_95_lower": 1.0, "ci_95_upper": 1.0},
-                deaths_cumulative={"median": 0.0, "ci_95_lower": 0.0, "ci_95_upper": 0.0},
-            )
-        ],
-        metadata={"model_version": version, "n_simulations": n_simulations},
-    )
-
-
 def _wait_for_terminal(manager: JobManager, job_id: str):
     deadline = monotonic() + 3
     while monotonic() < deadline:
@@ -91,7 +75,7 @@ def _wait_for_terminal(manager: JobManager, job_id: str):
     raise AssertionError("job did not finish")
 
 
-def test_full_refresh_emits_start_and_final_simulation_progress_for_small_runs(monkeypatch):
+def test_full_refresh_records_simulation_skipped_after_inference(monkeypatch):
     repo = _Repository()
     inference = INFERENCES[0].model_copy(
         update={
@@ -104,11 +88,7 @@ def test_full_refresh_emits_start_and_final_simulation_progress_for_small_runs(m
     def fake_run_inference(**kwargs):
         return SimpleNamespace(result=inference, posterior_samples={}, netcdf_path=None)
 
-    def fake_run_ensemble(*, scenario, inference, config, **kwargs):
-        return _forecast(scenario.name, inference.version, config.n_simulations)
-
     monkeypatch.setattr("eosp.services.inference.run_inference", fake_run_inference)
-    monkeypatch.setattr("eosp.services.ensemble.run_ensemble", fake_run_ensemble)
 
     manager = JobManager(
         repository=repo,
@@ -128,16 +108,10 @@ def test_full_refresh_emits_start_and_final_simulation_progress_for_small_runs(m
         manager.shutdown()
 
     simulation_events = [event for event in events if event.get("stage") == "simulation"]
-    assert simulation_events[0] == {
-        "stage": "simulation",
-        "status": "running",
-        "scenario": "baseline",
-        "trajectories": 0,
-        "total": 100,
-    }
-    assert simulation_events[-1]["status"] == "complete"
-    assert simulation_events[-1]["trajectories"] == 100
-    assert simulation_events[-1]["total"] == 100
+    assert len(simulation_events) == 1
+    assert simulation_events[0]["status"] == "skipped"
+    assert simulation_events[0].get("reason") == "abm_removed"
+    assert repo.forecasts == {}
 
 
 def test_full_refresh_fails_instead_of_falling_back_to_stored_posterior(monkeypatch):
@@ -147,11 +121,7 @@ def test_full_refresh_fails_instead_of_falling_back_to_stored_posterior(monkeypa
     def fake_run_inference(**kwargs):
         raise RuntimeError("sampler unavailable")
 
-    def fake_run_ensemble(**kwargs):
-        raise AssertionError("ensemble should not run without a fresh inference")
-
     monkeypatch.setattr("eosp.services.inference.run_inference", fake_run_inference)
-    monkeypatch.setattr("eosp.services.ensemble.run_ensemble", fake_run_ensemble)
 
     manager = JobManager(
         repository=repo,

@@ -1,35 +1,115 @@
+from datetime import date, timedelta
+
 from fastapi.testclient import TestClient
 import pytest
 
 from eosp.api.deps import claims_console_access, require_clerk_session
 from eosp.core.clerk_console import fetch_clerk_public_metadata
+from eosp.core.models import ForecastPoint, ForecastResponse
 from eosp.core.repository import InMemoryRepository
 from eosp.core.seed_data import ALERTS, CASES, INFERENCES, VALIDATIONS
 from eosp.core.settings import get_settings
 from eosp.main import app
-from eosp.services.forecast import _FORECAST_CACHE
 
 
 client = TestClient(app)
 
 
+def _geo_forecast_for_tests() -> dict:
+    hubs = ["ZA_JNB", "QA_DOH", "CH_ZRH", "NL_AMS"]
+    by_day = []
+    for day in range(1, 15):
+        buckets = {}
+        for code in hubs:
+            base_ci = 3.0 + day * 1.2
+            base_peak = 2.0 + day * 0.15
+            buckets[code] = {
+                "cumulative_infected": {
+                    "median": base_ci,
+                    "ci_95_lower": base_ci * 0.85,
+                    "ci_95_upper": base_ci * 1.15,
+                },
+                "infectious_I": {"median": 1.0, "ci_95_lower": 0.5, "ci_95_upper": 2.0},
+                "peak_infectious_I": {
+                    "median": base_peak,
+                    "ci_95_lower": base_peak * 0.8,
+                    "ci_95_upper": base_peak * 1.2,
+                },
+            }
+        by_day.append({"day": day, "buckets": buckets})
+    return {
+        "metric": "cumulative_infected",
+        "bucket_order": list(hubs),
+        "by_day": by_day,
+    }
+
+
+def _forecast_series(start: date, n_days: int, final_cumulative_median: float, final_deaths_median: float):
+    forecast = []
+    denom = max(n_days - 1, 1)
+    for d in range(n_days):
+        day = d + 1
+        t = d / denom
+        cum = 3.0 + (final_cumulative_median - 3.0) * t
+        prev_cum = 3.0 + (final_cumulative_median - 3.0) * ((d - 1) / denom) if d > 0 else 0.0
+        new = max(cum - prev_cum, 0.0) if d > 0 else cum
+        death = 0.0 + (final_deaths_median - 0.0) * t
+        lo_c, hi_c = cum * 0.9, cum * 1.1
+        forecast.append(
+            ForecastPoint(
+                day=day,
+                date=start + timedelta(days=d),
+                cases_cumulative={"median": cum, "ci_95_lower": lo_c, "ci_95_upper": hi_c},
+                cases_new={"median": new, "ci_95_lower": new * 0.9, "ci_95_upper": new * 1.1},
+                deaths_cumulative={"median": death, "ci_95_lower": death * 0.9, "ci_95_upper": death * 1.1},
+            )
+        )
+    return forecast
+
+
+def _stub_forecast_response(scenario: str, *, final_cases: float, n_sim: int = 100) -> ForecastResponse:
+    inf = INFERENCES[0]
+    inf_ver = inf.version
+    start = date(2026, 4, 25)
+    return ForecastResponse(
+        scenario=scenario,
+        forecast=_forecast_series(start, 14, final_cases, final_cases * 0.05),
+        metadata={
+            "model_version": inf_ver,
+            "posterior_version": inf_ver,
+            "n_simulations": n_sim,
+            "ensemble_spec_hash": "testhash",
+            "freshness_status": "current",
+            "geo_forecast": _geo_forecast_for_tests(),
+            "parameter_values": {
+                "p_transmit_mean": inf.parameters["p_transmit"].mean,
+                "contacts_daily_mean": inf.parameters["contacts_daily"].mean,
+                "incubation_mean": inf.parameters["incubation"].mean,
+            },
+        },
+    )
+
+
+def _seed_cached_forecasts(*scenarios: str) -> None:
+    """Populate the in-memory repository with stub forecasts (simulator removed)."""
+
+    repo = app.state.repository
+    if not hasattr(repo, "forecast_cache"):
+        raise AssertionError("test repository must expose forecast_cache")
+    presets = {
+        "baseline": _stub_forecast_response("baseline", final_cases=45.0),
+        "terminal_distancing": _stub_forecast_response("terminal_distancing", final_cases=30.0),
+    }
+    for name in scenarios:
+        if name not in presets:
+            raise AssertionError(f"add stub for scenario {name!r} in test presets")
+        repo.forecast_cache[name] = presets[name]
+
+
 def _clear_forecast_cache_everywhere() -> None:
-    _FORECAST_CACHE.clear()
     repo = getattr(app.state, "repository", None)
     if repo is not None and hasattr(repo, "forecast_cache"):
         repo.forecast_cache.clear()
-
-
-def _run_forecasts(*scenarios: str, n_simulations: int = 100) -> None:
-    response = client.post(
-        "/api/v1/forecasts/run",
-        json={
-            "scenarios": list(scenarios),
-            "model_version": "latest",
-            "n_simulations": n_simulations,
-        },
-    )
-    assert response.status_code == 200, response.text
 
 
 @pytest.fixture(autouse=True)
@@ -41,7 +121,6 @@ def reset_app_repository(monkeypatch):
     monkeypatch.setenv("EOSP_CLERK_SECRET_KEY", "")
     get_settings.cache_clear()
     app.dependency_overrides[require_clerk_session] = lambda: None
-    _FORECAST_CACHE.clear()
     app.state.repository = InMemoryRepository(
         cases=list(CASES),
         validations=dict(VALIDATIONS),
@@ -57,7 +136,6 @@ def reset_app_repository(monkeypatch):
     app.state.jobs = None
     yield
     app.dependency_overrides.pop(require_clerk_session, None)
-    _FORECAST_CACHE.clear()
 
 
 def test_claims_console_access_detects_metadata_and_claim():
@@ -236,7 +314,7 @@ def test_geo_outbreak_without_cached_forecast_shows_pending_layer():
 
 
 def test_geo_outbreak_uses_forecast_when_cached():
-    _run_forecasts("baseline")
+    _seed_cached_forecasts("baseline")
     r = client.get("/api/v1/geo/outbreak?risk_model=abm_geo")
     assert r.status_code == 200
     payload = r.json()
@@ -316,7 +394,7 @@ def test_case_summary_matches_seed_outbreak():
 
 
 def test_baseline_forecast_has_geo_forecast_not_opensky_snapshot():
-    _run_forecasts("baseline")
+    _seed_cached_forecasts("baseline")
     payload = client.get("/api/v1/forecasts/baseline").json()
     assert "legacy_opensky_geo" not in payload["metadata"]
     geo = payload["metadata"].get("geo_forecast") or {}
@@ -324,13 +402,13 @@ def test_baseline_forecast_has_geo_forecast_not_opensky_snapshot():
 
 
 def test_geo_after_baseline_run_uses_abm_kernel():
-    _run_forecasts("baseline")
+    _seed_cached_forecasts("baseline")
     geo = client.get("/api/v1/geo/outbreak?risk_model=legacy").json()
     assert geo["metadata"].get("risk_source") == "abm_geo_forecast"
 
 
 def test_forecast_includes_credible_intervals():
-    _run_forecasts("baseline")
+    _seed_cached_forecasts("baseline")
     response = client.get("/api/v1/forecasts/baseline")
     assert response.status_code == 200
     payload = response.json()
@@ -344,7 +422,7 @@ def test_forecast_includes_credible_intervals():
 
 
 def test_forecast_metadata_carries_inferred_parameters():
-    _run_forecasts("baseline")
+    _seed_cached_forecasts("baseline")
     response = client.get("/api/v1/forecasts/baseline")
     payload = response.json()
     parameter_values = payload["metadata"]["parameter_values"]
@@ -354,21 +432,21 @@ def test_forecast_metadata_carries_inferred_parameters():
 
 
 def test_forecast_metadata_geo_buckets_from_abm():
-    _run_forecasts("baseline")
+    _seed_cached_forecasts("baseline")
     response = client.get("/api/v1/forecasts/baseline")
     assert response.status_code == 200
     geo = response.json()["metadata"].get("geo_forecast") or {}
     assert geo.get("metric") == "cumulative_infected"
     order = geo.get("bucket_order") or []
     hubs = {"JNB", "DOH", "ZRH", "AMS"}
-    assert any(str(b).upper() in hubs for b in order)
+    assert any(any(h in str(b).upper() for h in hubs) for b in order)
     assert len(geo.get("by_day") or []) == 14
     last = geo["by_day"][-1]
-    assert "buckets" in last and any(str(k).upper() in hubs for k in (last["buckets"] or {}))
+    assert "buckets" in last and any(any(h in str(k).upper() for h in hubs) for k in (last["buckets"] or {}))
 
 
 def test_scenario_comparison_reports_baseline_delta():
-    _run_forecasts("baseline", "terminal_distancing")
+    _seed_cached_forecasts("baseline", "terminal_distancing")
     response = client.get("/api/v1/scenarios/compare?scenarios=baseline,terminal_distancing")
     assert response.status_code == 200
     scenarios = response.json()["scenarios"]
@@ -479,7 +557,7 @@ def test_create_case_persists_and_returns_validation():
     assert validation_response.status_code == 200
 
 
-def test_run_forecast_engine_persists_results():
+def test_run_forecast_returns_503_simulator_removed():
     response = client.post(
         "/api/v1/forecasts/run",
         json={
@@ -488,16 +566,11 @@ def test_run_forecast_engine_persists_results():
             "n_simulations": 250,
         },
     )
-    assert response.status_code == 200
-    payload = response.json()
-    assert payload["run_status"] == "completed"
-    assert len(payload["forecasts"]) == 2
-    assert payload["forecasts"][0]["cases_day_14"]["median"] >= 0
+    assert response.status_code == 503
+    assert "ABM_RETIREMENT" in response.json()["detail"] or "legacy" in response.json()["detail"].lower()
 
     runs_response = client.get("/api/v1/forecast-runs?limit=5")
     assert runs_response.status_code == 200
-    runs = runs_response.json()["runs"]
-    assert len(runs) >= 2
 
 
 def test_inference_jobs_endpoint_handles_missing_manager():
@@ -514,7 +587,7 @@ def test_forecast_returns_503_when_cache_empty():
 
 
 def test_scenario_compare_partial_when_scenario_missing_from_cache():
-    _run_forecasts("baseline")
+    _seed_cached_forecasts("baseline")
     repo = getattr(app.state, "repository", None)
     if repo is None or not hasattr(repo, "forecast_cache"):
         pytest.skip("partial compare test requires in-memory forecast_cache")

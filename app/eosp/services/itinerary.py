@@ -7,14 +7,17 @@ network_spec JSON.
 
 from __future__ import annotations
 
-from eosp.services import abm
 from eosp.services.network import ContactNetwork
+
+# Formerly imported from abm — keep in sync if a new simulator reintroduces state codes.
+STATE_H = 6
+STATE_D = 4
 
 
 def entity_may_enqueue_flight_legs(state_code: int) -> bool:
     """Hospitalised and deceased agents do not board further commercial legs (§7.2)."""
 
-    return state_code not in (abm.STATE_H, abm.STATE_D)
+    return state_code not in (STATE_H, STATE_D)
 
 
 def build_itinerary(entity_index: int, network: ContactNetwork) -> list[tuple[int, str, str]]:

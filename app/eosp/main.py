@@ -89,9 +89,10 @@ def create_app() -> FastAPI:
         title="Epidemic Outbreak Simulation Platform",
         version="0.2.0",
         description=(
-            "Hybrid ABM + Bayesian inference forecaster for the May 2026 Andes hantavirus outbreak. "
-            "NumPyro NUTS posteriors feed a vectorized SEIR+D Monte Carlo ensemble over a NetworkX "
-            "contact graph; results are cached and refreshed by background jobs."
+            "Bayesian inference (NumPyro NUTS) for the outbreak parameter posteriors. "
+            "Forward ABM Monte Carlo was removed; see docs/ABM_RETIREMENT.md. "
+            "Network summaries still feed inference via mean weighted degree. "
+            "Forecast caches are populated only when a replacement simulator is wired."
         ),
         lifespan=lifespan,
     )

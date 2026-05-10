@@ -61,10 +61,15 @@ def ensemble_config_from_env() -> EnsembleConfig:
 
 
 def inference_config_from_env() -> InferenceConfig:
+    raw_deg = os.environ.get("EOSP_INFERENCE_MEAN_WEIGHTED_DEGREE", "").strip()
+    network_summary = None
+    if raw_deg:
+        network_summary = {"mean_weighted_degree": float(raw_deg)}
     return InferenceConfig(
         num_warmup=int(os.environ.get("EOSP_NUTS_WARMUP", "1000")),
         num_samples=int(os.environ.get("EOSP_NUTS_SAMPLES", "2000")),
         num_chains=int(os.environ.get("EOSP_NUTS_CHAINS", "4")),
+        network_summary=network_summary,
     )
 
 

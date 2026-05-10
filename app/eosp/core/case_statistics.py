@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections import defaultdict
 from collections.abc import Iterable
+from datetime import date
 
 from eosp.core.models import CaseRecord, CaseStatus, ObservationKind
 
@@ -20,6 +21,51 @@ def total_death_equivalents(cases: Iterable[CaseRecord]) -> int:
         elif c.death_date is not None:
             n += c.cohort_size
     return n
+
+
+def line_list_compartment_targets(
+    cases: Iterable[CaseRecord],
+    *,
+    forecast_start: date,
+    still_infectious_within_days: int,
+) -> tuple[int, int, int, int]:
+    """Plausible E/I/R/D counts from **reported** line-list data only.
+
+    - **D**: cohort ``cohort_deaths`` and individual ``death_date`` rows.
+    - **I** vs **R** for everyone else: if ``forecast_start - symptom_onset`` is at
+      least ``still_infectious_within_days``, assume they have cleared infection (**R**);
+      otherwise they are still infectious (**I**).
+    - **E** is intentionally **0** here (no unobserved incubating pool unless you add
+      a separate model). This avoids inventing totals like ``1.5 ×`` reported cohort size.
+    """
+
+    e = 0
+    d = 0
+    i_cnt = 0
+    r = 0
+    for c in cases:
+        if c.observation_kind == ObservationKind.COHORT:
+            k = int(c.cohort_size)
+            cd = min(int(c.cohort_deaths), k)
+            d += cd
+            alive = k - cd
+            if alive <= 0:
+                continue
+            days = (forecast_start - c.symptom_onset_date).days
+            if days >= still_infectious_within_days:
+                r += alive
+            else:
+                i_cnt += alive
+        else:
+            if c.death_date is not None:
+                d += int(c.cohort_size)
+                continue
+            days = (forecast_start - c.symptom_onset_date).days
+            if days >= still_infectious_within_days:
+                r += int(c.cohort_size)
+            else:
+                i_cnt += int(c.cohort_size)
+    return e, i_cnt, r, d
 
 
 def validation_quality_weighted_mean(cases: Iterable[CaseRecord]) -> float:

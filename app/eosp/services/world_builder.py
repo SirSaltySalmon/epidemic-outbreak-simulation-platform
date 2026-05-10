@@ -5,14 +5,17 @@ around observed hub cases: **no ship** strata, **no** edge layers (patch / in-fl
 mass action only). Onward geography is a Markov chain on OpenFlights ``routes.dat``
 with optional **domestic continuation bias** from :func:`sample_next_airport`.
 
-Cohort size comes from ``flight_schedules_baseline.json`` ``n_passengers`` per hub row
-—not from any ``spawn_profile.ship`` counts (that block is UI / narrative only).
+Cohort size starts from ``flight_schedules_baseline.json`` ``n_passengers`` per hub row.
+When ``spawn_profile.use_ship_population_for_cohort`` is true (or ``cohort_population`` /
+``EOSP_COHORT_POPULATION`` is set), hub counts are **scaled proportionally** so the
+number of model agents matches **ship passengers + crew** (default 147), not the
+placeholder 20-per-hub total.
 
 .. note::
    :class:`~eosp.core.models.InferenceResult` drives **transmission parameters** only.
-   Initial E/I/R/D placement uses case-derived **aggregate counts** allocated on this
-   cohort (see :func:`~eosp.services.ensemble.seed_state_from_case_records`), including
-   proportional scaling to the pool when raw totals exceed ``N_pool``.
+   Initial E/I/R/D placement for a future forward model can use reported line-list rules
+   (:func:`~eosp.core.case_statistics.line_list_compartment_targets`). The retired Monte
+   Carlo runner was removed; see ``docs/ABM_RETIREMENT.md``.
 """
 
 from __future__ import annotations
@@ -24,6 +27,7 @@ from pathlib import Path
 from typing import Any
 
 from eosp.core.models import CaseRecord
+from eosp.core.settings import get_settings
 from eosp.services.case_seed import seed_manifest_from_cases
 from eosp.services.network import ContactNetwork, gateway_weights_from_network_spec, iata_from_destination
 from eosp.services.openflights_routes import (
@@ -60,6 +64,39 @@ def _default_airports_path() -> Path:
     if env:
         return Path(env)
     return _REPO_ROOT / "data" / "raw" / "openflights" / "airports.dat"
+
+
+def _scale_integers_proportional(parts: list[int], target: int) -> list[int]:
+    """Largest-remainder apportionment so ``sum(out) == target``."""
+
+    total = sum(parts)
+    if target <= 0 or not parts:
+        return [0] * len(parts)
+    if total <= 0:
+        return [0] * len(parts)
+    floats = [p * target / total for p in parts]
+    out = [int(f) for f in floats]
+    rem = target - sum(out)
+    order = sorted(range(len(parts)), key=lambda idx: (floats[idx] - out[idx], -idx), reverse=True)
+    for k in range(rem):
+        out[order[k]] += 1
+    return out
+
+
+def _resolve_cohort_population_target(spawn: dict[str, Any], baseline_total: int) -> int:
+    s = get_settings()
+    if s.cohort_population_override is not None:
+        return max(1, int(s.cohort_population_override))
+    cp = spawn.get("cohort_population")
+    if isinstance(cp, int):
+        return max(1, cp)
+    use_ship = bool(spawn.get("use_ship_population_for_cohort", False))
+    ship = spawn.get("ship")
+    if use_ship and isinstance(ship, dict):
+        p, c = ship.get("n_passengers"), ship.get("n_crew")
+        if isinstance(p, int) and isinstance(c, int):
+            return max(1, p + c)
+    return max(0, baseline_total)
 
 
 def _normalize_flights_for_gateway(flights: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -125,6 +162,7 @@ def build_world_contact_network(
 
     metadata: list[dict[str, Any]] = []
     hubs_set: set[str] = set()
+    hub_rows: list[tuple[str, str, int]] = []
     for fc in flights_norm:
         dest_full = str(fc.get("destination") or fc.get("destination_code", ""))
         hub_iata = iata_from_destination(dest_full)
@@ -132,6 +170,16 @@ def build_world_contact_network(
             continue
         hubs_set.add(hub_iata)
         n_here = int(fc.get("n_passengers", 0))
+        hub_rows.append((hub_iata, dest_full, n_here))
+
+    baseline_counts = [h[2] for h in hub_rows]
+    baseline_total = int(sum(baseline_counts))
+    target_pop = _resolve_cohort_population_target(spawn, baseline_total)
+    if baseline_total > 0 and target_pop != baseline_total:
+        scaled = _scale_integers_proportional(baseline_counts, target_pop)
+        hub_rows = [(hub_rows[j][0], hub_rows[j][1], scaled[j]) for j in range(len(hub_rows))]
+
+    for hub_iata, dest_full, n_here in hub_rows:
         for offset in range(n_here):
             metadata.append(
                 {
@@ -170,6 +218,8 @@ def build_world_contact_network(
             cur = nxt
 
     manifest = seed_manifest_from_cases(cases)
+    manifest["baseline_hub_passengers"] = baseline_total
+    manifest["cohort_population_target"] = len(metadata)
     return ContactNetwork(
         n_agents=n_agents,
         layers=[],

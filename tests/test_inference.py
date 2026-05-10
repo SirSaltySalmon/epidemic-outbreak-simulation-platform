@@ -1,7 +1,8 @@
 import pytest
 
+from eosp.core.compute_config import InferenceConfig
 from eosp.core.seed_data import CASES
-from eosp.services.inference import InferenceConfig, run_inference
+from eosp.services.inference import run_inference
 from eosp.services.network import build_default_network
 
 
@@ -49,3 +50,18 @@ def test_inference_artifacts_contain_posterior_samples(tmp_path):
     assert "p_transmit" in samples
     assert samples["p_transmit"].shape[0] == 60
     assert samples["p_transmit"].min() >= 0.0
+
+
+def test_run_inference_with_static_network_summary_skips_graph(tmp_path):
+    config = InferenceConfig(
+        num_warmup=80,
+        num_samples=80,
+        num_chains=1,
+        target_accept_prob=0.8,
+        persist_netcdf=False,
+        posteriors_dir=tmp_path,
+        network_summary={"mean_weighted_degree": 2.5},
+    )
+    artifacts = run_inference(cases=list(CASES), network=None, config=config)
+    assert artifacts.result.n_cases == len(CASES)
+    assert "p_transmit" in artifacts.result.parameters

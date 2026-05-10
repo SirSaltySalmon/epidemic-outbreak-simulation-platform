@@ -29,7 +29,7 @@ def _ensure_project_dependencies() -> None:
             "This script needs EOSP dependencies installed for the same Python you used to launch it.\n\n"
             f"From the repository root:\n  cd \"{repo_root}\"\n"
             f'  "{exe}" -m pip install -e "."\n'
-            f'  "{exe}" -m pip install -e ".[simulation]"   # required for inference / forecasts\n\n'
+            f'  "{exe}" -m pip install -e ".[simulation]"   # required for NumPyro inference\n\n'
             "Then run this script again (or use: eosp-researcher-gui after install).\n"
         )
         raise SystemExit(2) from None
@@ -146,7 +146,8 @@ class ResearcherGuiApp:
     def _build_warning_banner(self) -> None:
         db_url = get_settings().database_url or "(unset)"
         tip = (
-            "This tool runs inference and simulations locally and writes results to the database "
+            "This tool runs Bayesian inference locally and writes results to the database "
+            "(forward simulation was removed; see docs/ABM_RETIREMENT.md). "
             "configured in EOSP_DATABASE_URL. Use a development database unless you intend to "
             "update production."
         )

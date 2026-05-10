@@ -1,81 +1,33 @@
-from datetime import UTC, date, datetime
-from time import perf_counter
-from uuid import uuid4
+from datetime import date
 
 from eosp.core.models import ForecastResponse, ForecastRunItem, InferenceResult, ScenarioComparison, ScenarioComparisonItem
-from eosp.services.scenarios import SCENARIO_CONFIG
 
 _FORECAST_CACHE: dict[tuple[str, str, int], ForecastResponse] = {}
 
 FULL_SIMULATIONS = 10000
 
-_DEFAULT_NETWORK: object | None = None
+_SIMULATOR_REMOVED_MSG = (
+    "The legacy ABM Monte Carlo simulator was removed. See docs/ABM_RETIREMENT.md. "
+    "Wire a new forward model into forecast.build_forecast / JobManager to repopulate caches."
+)
 
 
-def _default_network():  # lazy: avoids NumPy/OpenFlights world build on slim API tiers
-    global _DEFAULT_NETWORK
-    if _DEFAULT_NETWORK is None:
-        from eosp.services.network import build_default_network
+class SimulatorRemovedError(RuntimeError):
+    """Raised when code attempts to run on-demand simulation after ABM removal."""
 
-        _DEFAULT_NETWORK = build_default_network()
-    return _DEFAULT_NETWORK
+    def __init__(self, message: str = _SIMULATOR_REMOVED_MSG) -> None:
+        super().__init__(message)
 
 
 def build_forecast(scenario: str, inference: InferenceResult, n_simulations: int = FULL_SIMULATIONS) -> ForecastResponse:
-    from eosp.core.compute_config import EnsembleConfig
-    from eosp.services.ensemble import run_ensemble, seed_state_from_case_counts
-
-    if scenario not in SCENARIO_CONFIG:
-        raise KeyError(scenario)
-    network = _default_network()
-    cache_key = (scenario, inference.version, n_simulations)
-    cached = _FORECAST_CACHE.get(cache_key)
-    if cached is not None:
-        return cached
-    seed = seed_state_from_case_counts(
-        network=network,
-        n_recent_active=max(1, min(3, inference.n_cases // 3)),
-        n_recovered=max(0, inference.n_cases - 3),
-        n_deceased=max(1, inference.n_cases // 4),
-        n_recently_exposed=max(4, inference.n_cases),
-        rng_seed=20260507,
-    )
-    forecast = run_ensemble(
-        scenario=SCENARIO_CONFIG[scenario],
-        inference=inference,
-        network=network,
-        seed=seed,
-        config=EnsembleConfig(
-            n_simulations=n_simulations,
-            n_days=14,
-            start_date=date(2026, 5, 7),
-            parallel=n_simulations >= 1000,
-        ),
-    )
-    forecast.metadata.setdefault("freshness_status", "current")
-    forecast.metadata.setdefault("cached_at", datetime.now(UTC).isoformat())
-    forecast.metadata.setdefault("posterior_version", inference.version)
-    _FORECAST_CACHE[cache_key] = forecast
-    return forecast
+    _ = scenario, inference, n_simulations
+    raise SimulatorRemovedError()
 
 
-def run_forecast_engine(scenario: str, inference: InferenceResult, n_simulations: int = FULL_SIMULATIONS) -> tuple[ForecastRunItem, ForecastResponse]:
-    started = perf_counter()
-    forecast = build_forecast(scenario, inference, n_simulations=n_simulations)
-    elapsed = round(perf_counter() - started + max(0.1, n_simulations / 10000 * 0.63), 3)
-    forecast.metadata["execution_time_seconds"] = elapsed
-    forecast.metadata["run_type"] = "local_forecast_engine"
-    final_point = forecast.forecast[-1]
-    item = ForecastRunItem(
-        forecast_id=uuid4(),
-        scenario=scenario,
-        model_version=inference.version,
-        n_simulations=n_simulations,
-        execution_time_seconds=elapsed,
-        cases_day_14=final_point.cases_cumulative,
-        deaths_day_14=final_point.deaths_cumulative,
-    )
-    return item, forecast
+def run_forecast_engine(
+    scenario: str, inference: InferenceResult, n_simulations: int = FULL_SIMULATIONS
+) -> tuple[ForecastRunItem, ForecastResponse]:
+    raise SimulatorRemovedError()
 
 
 class ForecastNotCachedError(LookupError):

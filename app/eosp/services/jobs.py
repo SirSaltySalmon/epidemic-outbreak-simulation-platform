@@ -1,10 +1,9 @@
-"""Background job orchestrator for inference + ensemble refreshes.
+"""Background job orchestrator for inference refreshes.
 
 The :class:`JobManager` owns a small ``ThreadPoolExecutor`` and is attached to
-the FastAPI app state via the lifespan handler. Endpoints schedule jobs and
-poll their status; the manager mutates the shared repository so subsequent GET
-requests serve the freshest forecasts. Refits are debounced (FR-2.2) so a
-flurry of new-case ingestions does not spawn N parallel NUTS runs.
+the FastAPI app state via the lifespan handler. Monte Carlo forward simulation
+was removed; see ``docs/ABM_RETIREMENT.md``. Full refresh runs **inference only**
+and no longer populates forecast caches.
 """
 
 from __future__ import annotations
@@ -15,7 +14,7 @@ import threading
 import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any, Mapping
 
@@ -25,7 +24,7 @@ from eosp.core.case_statistics import (
 )
 from eosp.core.compute_config import EnsembleConfig, InferenceConfig
 from eosp.core.models import CaseRecord, InferenceResult, TriggerType
-from eosp.services.network import ContactNetwork, build_default_network
+from eosp.services.network import build_default_network
 from eosp.services.scenarios import ScenarioSpec
 
 
@@ -166,7 +165,7 @@ class JobManager:
 
     def schedule_ensemble(self, *, scenario_name: str, reason: str = "manual") -> str:
         record = self._register(JOB_ENSEMBLE, reason=reason, detail={"scenario": scenario_name})
-        self._executor.submit(self._safe_run, record, lambda: self._run_single_ensemble(record, scenario_name))
+        self._executor.submit(self._safe_run, record, lambda: self._fail_simulator_removed(record))
         return record.job_id
 
     def get_status(self, job_id: str) -> JobRecord | None:
@@ -213,6 +212,13 @@ class JobManager:
                     if self._pipeline_job_id == record.job_id:
                         self._pipeline_job_id = None
 
+    def _fail_simulator_removed(self, record: JobRecord) -> None:
+        record.detail["simulator"] = "removed"
+        raise RuntimeError(
+            "Monte Carlo forward simulation was removed. See docs/ABM_RETIREMENT.md. "
+            "Inference-only refresh uses schedule_full_refresh / schedule_refit."
+        )
+
     def _run_full_refresh(self, record: JobRecord, trigger: TriggerType) -> None:
         cases = self._load_cases()
         if not cases:
@@ -228,13 +234,10 @@ class JobManager:
             "quality_mean": validation_quality_weighted_mean(cases),
         })
 
-        n_override = record.detail.get("n_simulations")
-        ensemble_cfg = (
-            replace(self._ensemble_config, n_simulations=int(n_override))
-            if n_override is not None
-            else self._ensemble_config
-        )
-        world_network = build_default_network(cases=cases, n_days=ensemble_cfg.n_days)
+        if self._inference_config.network_summary is not None:
+            world_network = None
+        else:
+            world_network = build_default_network(cases=cases, n_days=self._ensemble_config.n_days)
 
         from eosp.services.inference import run_inference
 
@@ -255,7 +258,6 @@ class JobManager:
         self._update_inference(artifacts.result)
         record.detail["inference_version"] = artifacts.result.version
         inference = artifacts.result
-        samples = artifacts.posterior_samples
         diag = inference.diagnostics
         record.push_event({
             "stage": "inference",
@@ -275,73 +277,14 @@ class JobManager:
             "chain_rhat": list(diag["rhat"].values()) if diag.get("rhat") else [],
         })
 
-        requested = record.detail.get("scenarios_requested")
-        if requested is None:
-            scenario_items: list[tuple[str, ScenarioSpec]] = list(self._scenarios.items())
-        else:
-            # Dashboard and /forecasts/baseline always expect baseline cached.
-            merged_request = list(dict.fromkeys(["baseline", *[n for n in requested if n != "baseline"]]))
-            scenario_items = []
-            for name in merged_request:
-                spec = self._scenarios.get(name)
-                if spec is None:
-                    raise KeyError(name)
-                scenario_items.append((name, spec))
-
-        seed = self._build_seed_state(cases, world_network)
-        from eosp.services.ensemble import run_ensemble
-
-        for scenario_name, spec in scenario_items:
-            total_simulations = int(ensemble_cfg.n_simulations)
-            record.push_event({
-                "stage": "simulation",
-                "status": "running",
-                "scenario": scenario_name,
-                "trajectories": 0,
-                "total": total_simulations,
-            })
-
-            def _callback(event: dict, _jid: str = record.job_id) -> None:
-                self.push_event(_jid, event)
-
-            response = run_ensemble(
-                scenario=spec,
-                inference=inference,
-                network=world_network,
-                seed=seed,
-                config=ensemble_cfg,
-                posterior_samples=samples,
-                progress_callback=_callback,
-            )
-            self._cache_forecast(scenario_name, response)
-            record.push_event({
-                "stage": "simulation",
-                "status": "complete",
-                "scenario": scenario_name,
-                "trajectories": total_simulations,
-                "total": total_simulations,
-                "elapsed_s": response.metadata.get("execution_time_seconds"),
-            })
-        record.detail["scenarios_refreshed"] = [n for n, _ in scenario_items]
-
-    def _run_single_ensemble(self, record: JobRecord, scenario_name: str) -> None:
-        if scenario_name not in self._scenarios:
-            raise KeyError(scenario_name)
-        cases = self._load_cases()
-        world_network = build_default_network(cases=cases, n_days=self._ensemble_config.n_days)
-        seed = self._build_seed_state(cases, world_network)
-        inference = self._repository.latest_inference()
-        from eosp.services.ensemble import run_ensemble
-
-        response = run_ensemble(
-            scenario=self._scenarios[scenario_name],
-            inference=inference,
-            network=world_network,
-            seed=seed,
-            config=self._ensemble_config,
-        )
-        self._cache_forecast(scenario_name, response)
-        record.detail["model_version"] = inference.version
+        record.push_event({
+            "stage": "simulation",
+            "status": "skipped",
+            "reason": "abm_removed",
+            "detail": "Monte Carlo engine removed; see docs/ABM_RETIREMENT.md",
+        })
+        record.detail["simulator"] = "removed"
+        record.detail["scenarios_refreshed"] = []
 
     def _load_cases(self) -> list[CaseRecord]:
         try:
@@ -350,17 +293,8 @@ class JobManager:
             logger.warning("Failed to load cases for inference: %s", exc)
             return []
 
-    def _build_seed_state(self, cases: list[CaseRecord], network: ContactNetwork) -> Any:
-        from eosp.services.ensemble import seed_state_from_case_records
-
-        return seed_state_from_case_records(network=network, cases=cases, rng_seed=20260507)
-
     def _update_inference(self, inference: InferenceResult) -> None:
         if hasattr(self._repository, "update_inference"):
             self._repository.update_inference(inference)
         elif hasattr(self._repository, "inferences"):
             self._repository.inferences.insert(0, inference)
-
-    def _cache_forecast(self, scenario_name: str, forecast: Any) -> None:
-        if hasattr(self._repository, "cache_forecast"):
-            self._repository.cache_forecast(scenario_name, forecast)

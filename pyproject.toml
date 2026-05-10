@@ -61,5 +61,5 @@ eosp = [
 eosp-researcher-gui = "eosp.tools.researcher_gui:main"
 
 [tool.vercel]
-# After `pip install .`, setuptools exposes package `eosp` (see package-dir), not `app.eosp`.
-entrypoint = "eosp.main:app"
+# Entrypoint imports must not pull `.[simulation]` (numpy/jax/networkx/…): keep installs to `pip install .`
+entrypoint = "app.eosp.main:app"

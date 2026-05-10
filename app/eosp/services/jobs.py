@@ -23,9 +23,8 @@ from eosp.core.case_statistics import (
     total_cohort_persons,
     validation_quality_weighted_mean,
 )
+from eosp.core.compute_config import EnsembleConfig, InferenceConfig
 from eosp.core.models import CaseRecord, InferenceResult, TriggerType
-from eosp.services.ensemble import EnsembleConfig, run_ensemble, seed_state_from_case_records
-from eosp.services.inference import InferenceConfig, run_inference
 from eosp.services.network import ContactNetwork, build_default_network
 from eosp.services.scenarios import ScenarioSpec
 
@@ -86,7 +85,6 @@ class JobManager:
         self,
         *,
         repository: Any,
-        network: ContactNetwork,
         scenarios: Mapping[str, ScenarioSpec],
         max_workers: int = 2,
         debounce_seconds: float = 30.0,
@@ -95,7 +93,6 @@ class JobManager:
     ) -> None:
         self._executor = ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="eosp-jobs")
         self._repository = repository
-        self._network = network
         self._scenarios = dict(scenarios)
         self._jobs: dict[str, JobRecord] = {}
         self._lock = threading.Lock()
@@ -239,6 +236,8 @@ class JobManager:
         )
         world_network = build_default_network(cases=cases, n_days=ensemble_cfg.n_days)
 
+        from eosp.services.inference import run_inference
+
         previous_inference: InferenceResult | None = None
         try:
             previous_inference = self._repository.latest_inference()
@@ -290,6 +289,8 @@ class JobManager:
                 scenario_items.append((name, spec))
 
         seed = self._build_seed_state(cases, world_network)
+        from eosp.services.ensemble import run_ensemble
+
         for scenario_name, spec in scenario_items:
             total_simulations = int(ensemble_cfg.n_simulations)
             record.push_event({
@@ -330,6 +331,8 @@ class JobManager:
         world_network = build_default_network(cases=cases, n_days=self._ensemble_config.n_days)
         seed = self._build_seed_state(cases, world_network)
         inference = self._repository.latest_inference()
+        from eosp.services.ensemble import run_ensemble
+
         response = run_ensemble(
             scenario=self._scenarios[scenario_name],
             inference=inference,
@@ -348,6 +351,8 @@ class JobManager:
             return []
 
     def _build_seed_state(self, cases: list[CaseRecord], network: ContactNetwork) -> Any:
+        from eosp.services.ensemble import seed_state_from_case_records
+
         return seed_state_from_case_records(network=network, cases=cases, rng_seed=20260507)
 
     def _update_inference(self, inference: InferenceResult) -> None:

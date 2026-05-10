@@ -504,11 +504,27 @@ def run_forecasts(
 
     items = []
     for scenario in payload.scenarios:
-        item, forecast_response = run_forecast_engine(
-            scenario=scenario,
-            inference=inference,
-            n_simulations=payload.n_simulations,
-        )
+        try:
+            item, forecast_response = run_forecast_engine(
+                scenario=scenario,
+                inference=inference,
+                n_simulations=payload.n_simulations,
+            )
+        except (ImportError, ModuleNotFoundError) as exc:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail=(
+                    "Forecast simulation dependencies are not installed on this deployment "
+                    "(omit optional `[simulation]` extras for slim serverless bundles). "
+                    "Use cached forecasts from your database or run simulations locally "
+                    'with `pip install -e ".[simulation]"`.'
+                ),
+            ) from exc
+        except RuntimeError as exc:
+            msg = str(exc)
+            if "NumPy is required" in msg or "NumPyro / JAX are required" in msg:
+                raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=msg) from exc
+            raise
         repo.save_forecast_run(
             item=item,
             forecast_json=forecast_response.model_dump(mode="json"),

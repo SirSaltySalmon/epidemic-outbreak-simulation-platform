@@ -23,8 +23,6 @@ import os
 from pathlib import Path
 from typing import Any
 
-import numpy as np
-
 from eosp.core.models import CaseRecord
 from eosp.services.case_seed import seed_manifest_from_cases
 from eosp.services.network import ContactNetwork, gateway_weights_from_network_spec, iata_from_destination
@@ -86,8 +84,10 @@ def build_world_contact_network(
     baseline_path: Path | str | None = None,
     routes_path: Path | str | None = None,
     airports_path: Path | str | None = None,
-    rng: np.random.Generator | None = None,
+    rng: Any | None = None,
 ) -> ContactNetwork:
+    import numpy as np
+
     cases = cases or []
     spawn = spawn if spawn is not None else load_spawn_profile(spawn_path)
     baseline = baseline if baseline is not None else load_baseline_schedule(baseline_path)

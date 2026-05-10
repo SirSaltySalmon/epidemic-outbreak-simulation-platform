@@ -19,12 +19,11 @@ from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import Any, Iterable
 
-import numpy as np
-
 from eosp.core.case_statistics import (
     total_cohort_persons,
     validation_quality_weighted_mean,
 )
+from eosp.core.compute_config import InferenceConfig
 from eosp.core.models import (
     CaseRecord,
     ConvergenceStatus,
@@ -38,25 +37,26 @@ from eosp.services.network import ContactNetwork
 logger = logging.getLogger(__name__)
 
 
-@dataclass
-class InferenceConfig:
-    num_warmup: int = 1000
-    num_samples: int = 2000
-    num_chains: int = 4
-    target_accept_prob: float = 0.85
-    rng_seed: int = 20260507
-    persist_netcdf: bool = True
-    posteriors_dir: Path | None = None
+def _require_numpy():  # pragma: no cover - exercised when simulation extras omitted
+    try:
+        import numpy as np
+    except ImportError as exc:
+        raise RuntimeError(
+            "NumPy is required for inference and simulation workloads. "
+            'Install EOSP simulation extras with `pip install -e ".[simulation]"`.'
+        ) from exc
+    return np
 
 
 @dataclass
 class InferenceArtifacts:
     result: InferenceResult
-    posterior_samples: dict[str, np.ndarray]
+    posterior_samples: dict[str, Any]
     netcdf_path: str | None
 
 
-def daily_onsets_from_cases(cases: Iterable[CaseRecord], start_date: date, n_days: int) -> np.ndarray:
+def daily_onsets_from_cases(cases: Iterable[CaseRecord], start_date: date, n_days: int) -> Any:
+    np = _require_numpy()
     counts = np.zeros(n_days, dtype=np.int32)
     for case in cases:
         offset = (case.symptom_onset_date - start_date).days
@@ -146,10 +146,11 @@ def run_inference(
 
 def _run_nuts(
     *,
-    counts: np.ndarray,
+    counts: Any,
     network_summary: dict[str, float],
     config: InferenceConfig,
-) -> dict[str, np.ndarray]:
+) -> dict[str, Any]:
+    np = _require_numpy()
     try:
         import jax
         import jax.numpy as jnp
@@ -207,7 +208,8 @@ def _run_nuts(
     return {key: np.asarray(value) for key, value in samples.items()}
 
 
-def _summarize(samples: dict[str, np.ndarray]) -> dict[str, ParameterEstimate]:
+def _summarize(samples: dict[str, Any]) -> dict[str, ParameterEstimate]:
+    np = _require_numpy()
     summary: dict[str, ParameterEstimate] = {}
     for name, draws in samples.items():
         if name == "concentration" or name == "initial_rate":
@@ -222,10 +224,11 @@ def _summarize(samples: dict[str, np.ndarray]) -> dict[str, ParameterEstimate]:
 
 
 def _diagnostics(
-    samples: dict[str, np.ndarray],
+    samples: dict[str, Any],
     *,
     config: InferenceConfig,
 ) -> dict[str, Any]:
+    np = _require_numpy()
     rhat: dict[str, float] = {}
     ess: dict[str, float] = {}
     try:
@@ -254,7 +257,8 @@ def _diagnostics(
     }
 
 
-def _reshape_chains(values: np.ndarray, num_chains: int) -> np.ndarray:
+def _reshape_chains(values: Any, num_chains: int) -> Any:
+    np = _require_numpy()
     if values.ndim >= 2 and values.shape[0] == num_chains:
         return values
     flat = np.asarray(values).reshape(-1)
@@ -264,7 +268,8 @@ def _reshape_chains(values: np.ndarray, num_chains: int) -> np.ndarray:
     return flat.reshape(1, -1)
 
 
-def _count_divergences(samples: dict[str, np.ndarray]) -> int:
+def _count_divergences(samples: dict[str, Any]) -> int:
+    np = _require_numpy()
     diverging = samples.get("diverging")
     if diverging is None:
         return 0
@@ -274,7 +279,7 @@ def _count_divergences(samples: dict[str, np.ndarray]) -> int:
 def _persist_netcdf(
     *,
     version: str,
-    posterior_samples: dict[str, np.ndarray],
+    posterior_samples: dict[str, Any],
     diagnostics: dict[str, Any],
     config: InferenceConfig,
 ) -> str | None:
@@ -284,6 +289,8 @@ def _persist_netcdf(
         import arviz as az  # type: ignore
     except ImportError:  # pragma: no cover - arviz is in dependencies
         return None
+
+    _require_numpy()
 
     directory = config.posteriors_dir or _default_posteriors_dir()
     directory.mkdir(parents=True, exist_ok=True)

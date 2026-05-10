@@ -13,7 +13,6 @@ from __future__ import annotations
 import hashlib
 import os
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 from time import perf_counter
 from typing import Any, Callable, Iterable, Mapping, cast
@@ -21,6 +20,7 @@ from typing import Any, Callable, Iterable, Mapping, cast
 import numpy as np
 
 from eosp.core.case_statistics import total_cohort_persons, total_death_equivalents
+from eosp.core.compute_config import EnsembleConfig
 from eosp.core.models import CaseRecord, ForecastPoint, ForecastResponse, InferenceResult
 from eosp.services.abm import SeedState, Trajectory, simulate_trajectory
 from eosp.services.geo_buckets import (
@@ -31,7 +31,6 @@ from eosp.services.geo_buckets import (
     GEO_BUCKET_METRIC_PEAK_INFECTIOUS_I_DETAIL,
     GEO_BUCKET_METRIC_PEAK_INFECTIOUS_I_ID,
 )
-from eosp.services.itinerary import RISK_METRIC_DETAIL
 from eosp.services.network import ContactNetwork
 from eosp.services.scenarios import ScenarioSpec
 
@@ -39,14 +38,10 @@ from eosp.services.scenarios import ScenarioSpec
 PERCENTILES = (2.5, 25.0, 50.0, 75.0, 97.5)
 
 
-@dataclass
-class EnsembleConfig:
-    n_simulations: int = 10000
-    n_days: int = 14
-    start_date: date = date(2026, 5, 7)
-    rng_seed: int = 20260507
-    parallel: bool = True
-    max_workers: int | None = None
+_RISK_METRIC_DETAIL = (
+    "Infections among hub contact-cohort agents and in-flight co-location. "
+    "Broader community transmission at airports is not modelled in this version."
+)
 
 
 def run_ensemble(
@@ -98,7 +93,7 @@ def run_ensemble(
             "model_version": inference.version,
             "n_simulations": config.n_simulations,
             "ensemble_spec_hash": ensemble_spec_hash,
-            "risk_metric_detail": RISK_METRIC_DETAIL,
+            "risk_metric_detail": _RISK_METRIC_DETAIL,
             "parameter_values": {
                 "p_transmit_mean": float(np.mean(samples["p_transmit"])),
                 "p_transmit_std": float(np.std(samples["p_transmit"])),

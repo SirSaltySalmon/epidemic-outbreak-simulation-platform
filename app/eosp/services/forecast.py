@@ -3,25 +3,37 @@ from time import perf_counter
 from uuid import uuid4
 
 from eosp.core.models import ForecastResponse, ForecastRunItem, InferenceResult, ScenarioComparison, ScenarioComparisonItem
-from eosp.services.ensemble import EnsembleConfig, run_ensemble, seed_state_from_case_counts
-from eosp.services.network import build_default_network
 from eosp.services.scenarios import SCENARIO_CONFIG
 
-_NETWORK = build_default_network()
 _FORECAST_CACHE: dict[tuple[str, str, int], ForecastResponse] = {}
 
 FULL_SIMULATIONS = 10000
 
+_DEFAULT_NETWORK: object | None = None
+
+
+def _default_network():  # lazy: avoids NumPy/OpenFlights world build on slim API tiers
+    global _DEFAULT_NETWORK
+    if _DEFAULT_NETWORK is None:
+        from eosp.services.network import build_default_network
+
+        _DEFAULT_NETWORK = build_default_network()
+    return _DEFAULT_NETWORK
+
 
 def build_forecast(scenario: str, inference: InferenceResult, n_simulations: int = FULL_SIMULATIONS) -> ForecastResponse:
+    from eosp.core.compute_config import EnsembleConfig
+    from eosp.services.ensemble import run_ensemble, seed_state_from_case_counts
+
     if scenario not in SCENARIO_CONFIG:
         raise KeyError(scenario)
+    network = _default_network()
     cache_key = (scenario, inference.version, n_simulations)
     cached = _FORECAST_CACHE.get(cache_key)
     if cached is not None:
         return cached
     seed = seed_state_from_case_counts(
-        network=_NETWORK,
+        network=network,
         n_recent_active=max(1, min(3, inference.n_cases // 3)),
         n_recovered=max(0, inference.n_cases - 3),
         n_deceased=max(1, inference.n_cases // 4),
@@ -31,7 +43,7 @@ def build_forecast(scenario: str, inference: InferenceResult, n_simulations: int
     forecast = run_ensemble(
         scenario=SCENARIO_CONFIG[scenario],
         inference=inference,
-        network=_NETWORK,
+        network=network,
         seed=seed,
         config=EnsembleConfig(
             n_simulations=n_simulations,

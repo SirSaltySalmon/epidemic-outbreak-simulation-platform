@@ -5,8 +5,7 @@ from __future__ import annotations
 import csv
 from collections import Counter
 from pathlib import Path
-
-import numpy as np
+from typing import Any
 
 
 def parse_route_edge_counts(routes_path: Path) -> Counter[tuple[str, str]]:
@@ -74,7 +73,7 @@ def all_iatas_from_counts(edge_counts: Counter[tuple[str, str]]) -> set[str]:
 
 
 def sample_next_airport(
-    rng: np.random.Generator,
+    rng: Any,
     outbound: dict[str, dict[str, int]],
     current_iata: str,
     *,
@@ -87,6 +86,8 @@ def sample_next_airport(
     exist, **stay** at ``current_iata`` (no silent international fallback). Empty
     outbound also **stay**s.
     """
+
+    import numpy as np
 
     cur_u = str(current_iata).upper()
     outs = outbound.get(cur_u)

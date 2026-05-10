@@ -6,7 +6,6 @@ from typing import Any
 from eosp.core.models import ForecastPoint, ForecastResponse, InferenceResult, TriggerType
 from eosp.core.seed_data import CASES, INFERENCES
 from eosp.services.jobs import JobManager
-from eosp.services.network import build_default_network
 from eosp.services.scenarios import SCENARIO_CONFIG
 
 
@@ -18,7 +17,6 @@ class _EmptyRepository:
 def test_schedule_full_refresh_can_be_called_on_manager_instance():
     manager = JobManager(
         repository=_EmptyRepository(),
-        network=object(),
         scenarios=SCENARIO_CONFIG,
         max_workers=1,
     )
@@ -109,12 +107,11 @@ def test_full_refresh_emits_start_and_final_simulation_progress_for_small_runs(m
     def fake_run_ensemble(*, scenario, inference, config, **kwargs):
         return _forecast(scenario.name, inference.version, config.n_simulations)
 
-    monkeypatch.setattr("eosp.services.jobs.run_inference", fake_run_inference)
-    monkeypatch.setattr("eosp.services.jobs.run_ensemble", fake_run_ensemble)
+    monkeypatch.setattr("eosp.services.inference.run_inference", fake_run_inference)
+    monkeypatch.setattr("eosp.services.ensemble.run_ensemble", fake_run_ensemble)
 
     manager = JobManager(
         repository=repo,
-        network=build_default_network(),
         scenarios=SCENARIO_CONFIG,
         max_workers=1,
     )
@@ -153,12 +150,11 @@ def test_full_refresh_fails_instead_of_falling_back_to_stored_posterior(monkeypa
     def fake_run_ensemble(**kwargs):
         raise AssertionError("ensemble should not run without a fresh inference")
 
-    monkeypatch.setattr("eosp.services.jobs.run_inference", fake_run_inference)
-    monkeypatch.setattr("eosp.services.jobs.run_ensemble", fake_run_ensemble)
+    monkeypatch.setattr("eosp.services.inference.run_inference", fake_run_inference)
+    monkeypatch.setattr("eosp.services.ensemble.run_ensemble", fake_run_ensemble)
 
     manager = JobManager(
         repository=repo,
-        network=build_default_network(),
         scenarios=SCENARIO_CONFIG,
         max_workers=1,
     )

@@ -15,7 +15,7 @@
 
 from __future__ import annotations
 
-import numpy as np
+from typing import Any
 
 from eosp.services.network import ContactNetwork
 
@@ -35,8 +35,16 @@ GEO_BUCKET_METRIC_PEAK_INFECTIOUS_I_DETAIL = (
 )
 
 
-def geo_bucket_spec(network: ContactNetwork) -> tuple[tuple[str, ...], np.ndarray]:
+def _require_numpy_bundle():  # lazy: ensembles / ABM load NumPy here
+    import numpy as np
+
+    return np
+
+
+def geo_bucket_spec(network: ContactNetwork) -> tuple[tuple[str, ...], Any]:
     """Return ``(labels, agent_bucket)`` with ``agent_bucket[i]`` in ``0..len(labels)-1``."""
+
+    np = _require_numpy_bundle()
 
     if network.itinerary_bucket_labels and network.itinerary_contact_patch is not None:
         labels = network.itinerary_bucket_labels

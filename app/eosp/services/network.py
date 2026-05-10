@@ -14,12 +14,19 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Iterable
 
-import networkx as nx
-import numpy as np
-from scipy import sparse
 
+def _scipy_bundle() -> tuple[Any, Any, Any]:
+    """Late-import NumPy / NetworkX / SciPy so lean API tiers avoid heavy wheels."""
 
-EDGE_TYPES = ("household", "workplace", "social", "transient", "flight", "hospital", "family")
+    bundle: tuple[Any, Any, Any] | None = getattr(_scipy_bundle, "_cache", None)  # type: ignore[attr-defined]
+    if bundle is None:
+        import numpy as np
+        import networkx as nx
+        from scipy import sparse as scipy_sparse
+
+        bundle = (np, nx, scipy_sparse)
+        setattr(_scipy_bundle, "_cache", bundle)  # type: ignore[attr-defined]
+    return bundle
 
 
 @dataclass
@@ -42,8 +49,8 @@ class ContactNetwork:
     gateway_weights: dict[str, float] | None = None
     gateway_pseudocount: float | None = None
     flight_passengers_by_flight: dict[str, list[int]] | None = None
-    itinerary_contact_patch: np.ndarray | None = None
-    itinerary_flight_group: np.ndarray | None = None
+    itinerary_contact_patch: Any | None = None
+    itinerary_flight_group: Any | None = None
     itinerary_bucket_labels: tuple[str, ...] | None = None
     itinerary_snapshot_id: str | None = None
     itinerary_seed_manifest: dict[str, Any] | None = None
@@ -51,7 +58,8 @@ class ContactNetwork:
     itinerary_flight_weight: float = 1.0
     agent_itinerary_legs: dict[int, list[tuple[int, str, str]]] | None = None
 
-    def graph(self) -> nx.DiGraph:
+    def graph(self) -> Any:
+        _, nx, _ = _scipy_bundle()
         graph = nx.DiGraph()
         for index, meta in enumerate(self.node_metadata):
             graph.add_node(index, **meta)
@@ -67,7 +75,8 @@ class ContactNetwork:
                 )
         return graph
 
-    def adjacency_for_day(self, day: int) -> sparse.csr_matrix:
+    def adjacency_for_day(self, day: int) -> Any:
+        _, _, sparse = _scipy_bundle()
         rows: list[int] = []
         cols: list[int] = []
         data: list[float] = []
@@ -97,6 +106,8 @@ class ContactNetwork:
         onsets without running the stochastic ABM inside MCMC.
         """
 
+        np, _, _ = _scipy_bundle()
+
         if self.itinerary_contact_patch is not None:
             return self._itinerary_degree_summary()
 
@@ -120,6 +131,7 @@ class ContactNetwork:
     def _itinerary_degree_summary(self) -> dict[str, float]:
         """Approximate mean weighted degree from patch + in-flight co-location (Track B)."""
 
+        np, _, _ = _scipy_bundle()
         arr = self.itinerary_contact_patch
         fg = self.itinerary_flight_group
         if arr is None:
@@ -212,13 +224,14 @@ def gateway_weights_from_network_spec(
 
 
 def assign_flight_passengers_from_spec(
-    rng: np.random.Generator,
+    rng: Any,
     n_passengers: int,
     n_crew: int,
     flights: list[dict[str, Any]],
 ) -> dict[str, list[int]]:
     """Assign each ship agent to at most one evacuation flight (capacity = sum of ``n_passengers``)."""
 
+    np, _, _ = _scipy_bundle()
     n_ship = n_passengers + n_crew
     slots: list[dict[str, Any]] = []
     for flight_cfg in flights:
@@ -255,6 +268,7 @@ def build_default_network(
 
 
 def _legacy_contact_network_from_spec(spec: dict[str, Any], *, n_days: int) -> ContactNetwork:
+    np, _, _ = _scipy_bundle()
     rng = np.random.default_rng(spec.get("rng_seed", 20260507))
     gw_eps = float(spec.get("gateway_pseudocount", 0.5))
     gw_allow = spec.get("gateway_allowlist")
@@ -437,7 +451,7 @@ def apply_modifications(network: ContactNetwork, modifications: dict[str, Any]) 
 
 
 def _build_household_layer(
-    rng: np.random.Generator,
+    rng: Any,
     n_passengers: int,
     cabin_cfg: dict[str, Any],
     weight: float,
@@ -472,7 +486,7 @@ def _build_workplace_layer(
 
 
 def _build_social_layer(
-    rng: np.random.Generator,
+    rng: Any,
     n_ship: int,
     mean_social: int,
     weight: float,
@@ -495,7 +509,7 @@ def _build_social_layer(
 
 
 def _build_transient_layer(
-    rng: np.random.Generator,
+    rng: Any,
     n_ship: int,
     mean_transient: int,
     weight: float,
@@ -541,7 +555,7 @@ def _build_flight_layer(
 
 
 def _build_destination_layer(
-    rng: np.random.Generator,
+    rng: Any,
     name: str,
     type_name: str,
     flight_passengers: Iterable[int],
@@ -555,6 +569,7 @@ def _build_destination_layer(
     cluster = list(cluster_indices)
     if not cluster:
         return EdgeLayer(name=name, type=type_name, edges=[], active_from=active_from, active_to=active_to)
+    np, _, _ = _scipy_bundle()
     for passenger in flight_passengers:
         targets = rng.choice(cluster, size=min(contacts_per_passenger, len(cluster)), replace=False)
         for target in np.atleast_1d(targets):

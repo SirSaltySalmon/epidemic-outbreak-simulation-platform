@@ -3,7 +3,6 @@ from __future__ import annotations
 import asyncio
 import logging
 from contextlib import asynccontextmanager
-from pathlib import Path
 from typing import AsyncIterator
 
 from fastapi import FastAPI
@@ -16,12 +15,9 @@ from eosp.core.bootstrap import (
 )
 from eosp.core.models import TriggerType
 from eosp.core.settings import get_settings
-from eosp.services.network import build_default_network
 from eosp.services.who_don_hub_cycle import run_who_don_hub_ingest_cycle
 
 logger = logging.getLogger("eosp.main")
-
-STATIC_DIR = Path(__file__).resolve().parent / "static"
 
 
 async def _who_don_polling_loop(app: FastAPI) -> None:
@@ -71,7 +67,6 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     repo, db_health = build_repository_with_status()
     app.state.repository = repo
     app.state.db_health = db_health
-    app.state.network = build_default_network()
     job_manager = create_default_job_manager(app.state.repository)
     app.state.jobs = job_manager
     poll_task: asyncio.Task[None] | None = None
@@ -101,7 +96,7 @@ def create_app() -> FastAPI:
         lifespan=lifespan,
     )
     app.include_router(router, prefix="/api/v1")
-    app.mount("/", StaticFiles(directory=str(STATIC_DIR), html=True), name="static")
+    app.mount("/", StaticFiles(directory="app/eosp/static", html=True), name="static")
     # Fallback repository so the app is usable even without the lifespan context
     # active (e.g. ``TestClient(app)`` without ``with`` block). The lifespan
     # handler will replace it with the live repository + JobManager bindings.

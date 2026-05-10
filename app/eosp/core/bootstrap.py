@@ -8,12 +8,10 @@ from typing import Any
 
 from sqlalchemy import text
 
+from eosp.core.compute_config import EnsembleConfig, InferenceConfig
 from eosp.core.db import create_session_factory
 from eosp.core.repository import SqlRepository, empty_repository
-from eosp.services.ensemble import EnsembleConfig
-from eosp.services.inference import InferenceConfig
 from eosp.services.jobs import JobManager
-from eosp.services.network import build_default_network
 from eosp.services.scenarios import SCENARIO_CONFIG
 
 logger = logging.getLogger("eosp.bootstrap")
@@ -73,7 +71,6 @@ def inference_config_from_env() -> InferenceConfig:
 def create_default_job_manager(repository: Any) -> JobManager:
     return JobManager(
         repository=repository,
-        network=build_default_network(),
         scenarios=SCENARIO_CONFIG,
         max_workers=2,
         debounce_seconds=30.0,

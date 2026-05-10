@@ -9,6 +9,11 @@
       "technical_explanation": "parameter_overrides is empty. network_modifications is empty so apply_modifications leaves ContactNetwork unchanged: itinerary_patch_weight and itinerary_flight_weight stay 1.0 from build_world_contact_network. Ensemble draws p_transmit, contacts_daily, incubation, h2h_multiplier, and cfr from the inferred posterior summaries (or raw posterior samples when provided), then runs the ABM with patch co-location exposure (contacts_daily enters as mix = contacts_daily / 24 on patch pressure).",
       "network_modifications": {},
       "parameter_overrides": {},
+      "hub_timeline": {
+        "contacts": { "mu_travel": 20, "mu_stay": 5, "mu_onset_burst": 20, "r_dispersion": 8.0 },
+        "load": { "alpha": 0.08 },
+        "mobility": { "p_stay_when_at_home": 0.7, "p_return_when_away": 0.7 }
+      },
       "ui_color": "rgb(11,124,131)"
     },
     {
@@ -21,6 +26,11 @@
         "modify_weights": { "itinerary_patch": 0.62 }
       },
       "parameter_overrides": {},
+      "hub_timeline": {
+        "contacts": { "mu_travel": 20, "mu_stay": 5, "mu_onset_burst": 20, "r_dispersion": 8.0 },
+        "load": { "alpha": 0.08 },
+        "mobility": { "p_stay_when_at_home": 0.7, "p_return_when_away": 0.7 }
+      },
       "ui_color": "rgb(47,125,79)"
     },
     {
@@ -33,6 +43,11 @@
       "parameter_overrides": {
         "contacts_daily": 1.75
       },
+      "hub_timeline": {
+        "contacts": { "mu_travel": 20, "mu_stay": 5, "mu_onset_burst": 20, "r_dispersion": 8.0 },
+        "load": { "alpha": 0.08 },
+        "mobility": { "p_stay_when_at_home": 0.7, "p_return_when_away": 0.7 }
+      },
       "ui_color": "rgb(185,91,53)"
     },
     {
@@ -44,6 +59,11 @@
       "network_modifications": {},
       "parameter_overrides": {
         "p_transmit_scale": 0.45
+      },
+      "hub_timeline": {
+        "contacts": { "mu_travel": 20, "mu_stay": 5, "mu_onset_burst": 20, "r_dispersion": 8.0 },
+        "load": { "alpha": 0.08 },
+        "mobility": { "p_stay_when_at_home": 0.7, "p_return_when_away": 0.7 }
       },
       "ui_color": "rgb(47,125,79)"
     }

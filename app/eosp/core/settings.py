@@ -33,6 +33,9 @@ class Settings(BaseSettings):
     # Required on direct HTTP calls to api.clerk.com (see Clerk versioning docs).
     clerk_backend_api_version: str = "2025-04-10"
 
+    #: Optional UUID string: excluded from hub timeline anchor + line-list forcing (narrative index case).
+    hub_index_case_id: str | None = None
+
     #: When set, hub cohort agent count in :func:`build_world_contact_network` uses this
     #: instead of summing baseline flight ``n_passengers`` (overrides spawn ship block).
     cohort_population_override: int | None = None

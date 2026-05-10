@@ -22,7 +22,6 @@ from eosp.core.models import (
 )
 from eosp.services.forecast import (
     ForecastNotCachedError,
-    SimulatorRemovedError,
     compare_scenarios,
     get_cached_forecast,
     run_forecast_engine,
@@ -508,18 +507,19 @@ def run_forecasts(
         raise HTTPException(status_code=404, detail="Model version not found")
 
     items = []
-    for scenario in payload.scenarios:
+    scenarios_s = list(payload.scenarios)
+    n_sims = int(payload.n_simulations)
+    index_id = get_settings().hub_index_case_id
+    case_rows = list(repo.list_cases())
+    for scenario in scenarios_s:
         try:
             item, forecast_response = run_forecast_engine(
                 scenario=scenario,
                 inference=inference,
-                n_simulations=payload.n_simulations,
+                n_simulations=n_sims,
+                cases=case_rows,
+                index_case_id=index_id,
             )
-        except SimulatorRemovedError as exc:
-            raise HTTPException(
-                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                detail=str(exc),
-            ) from exc
         except (ImportError, ModuleNotFoundError) as exc:
             raise HTTPException(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,

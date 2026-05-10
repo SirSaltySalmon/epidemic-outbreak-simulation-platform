@@ -22,6 +22,7 @@ class ScenarioSpec:
     description: str = ""
     network_modifications: dict[str, Any] = field(default_factory=dict)
     parameter_overrides: dict[str, Any] = field(default_factory=dict)
+    hub_timeline: dict[str, Any] = field(default_factory=dict)
     public_label: str = ""
     similar_to: str = ""
     technical_explanation: str = ""
@@ -63,6 +64,7 @@ def load_scenarios(path: Path | str | None = None) -> dict[str, ScenarioSpec]:
             description=entry.get("description", ""),
             network_modifications=entry.get("network_modifications", {}) or {},
             parameter_overrides=entry.get("parameter_overrides", {}) or {},
+            hub_timeline=entry.get("hub_timeline") or {},
             public_label=entry.get("public_label") or nm.replace("_", " ").title(),
             similar_to=entry.get("similar_to", ""),
             technical_explanation=entry.get("technical_explanation", ""),

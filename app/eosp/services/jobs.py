@@ -1,9 +1,9 @@
 """Background job orchestrator for inference refreshes.
 
 The :class:`JobManager` owns a small ``ThreadPoolExecutor`` and is attached to
-the FastAPI app state via the lifespan handler. Monte Carlo forward simulation
-was removed; see ``docs/ABM_RETIREMENT.md``. Full refresh runs **inference only**
-and no longer populates forecast caches.
+the FastAPI app state via the lifespan handler. After NumPyro inference, full
+refresh runs the hub timeline Monte Carlo for configured scenarios and
+repopulates forecast caches (see ``docs/superpowers/specs/2026-05-10-eosp-hub-timeline-simulator-design.md``).
 """
 
 from __future__ import annotations
@@ -24,6 +24,7 @@ from eosp.core.case_statistics import (
 )
 from eosp.core.compute_config import EnsembleConfig, InferenceConfig
 from eosp.core.models import CaseRecord, InferenceResult, TriggerType
+from eosp.core.settings import get_settings
 from eosp.services.network import build_default_network
 from eosp.services.scenarios import ScenarioSpec
 
@@ -165,7 +166,7 @@ class JobManager:
 
     def schedule_ensemble(self, *, scenario_name: str, reason: str = "manual") -> str:
         record = self._register(JOB_ENSEMBLE, reason=reason, detail={"scenario": scenario_name})
-        self._executor.submit(self._safe_run, record, lambda: self._fail_simulator_removed(record))
+        self._executor.submit(self._safe_run, record, lambda: self._run_single_scenario_forecast(record, scenario_name))
         return record.job_id
 
     def get_status(self, job_id: str) -> JobRecord | None:
@@ -212,12 +213,33 @@ class JobManager:
                     if self._pipeline_job_id == record.job_id:
                         self._pipeline_job_id = None
 
-    def _fail_simulator_removed(self, record: JobRecord) -> None:
-        record.detail["simulator"] = "removed"
-        raise RuntimeError(
-            "Monte Carlo forward simulation was removed. See docs/ABM_RETIREMENT.md. "
-            "Inference-only refresh uses schedule_full_refresh / schedule_refit."
+    def _run_single_scenario_forecast(self, record: JobRecord, scenario_name: str) -> None:
+        cases = self._load_cases()
+        if not cases:
+            raise RuntimeError("No case records in the database.")
+        inference = self._repository.latest_inference()
+        idx = get_settings().hub_index_case_id
+        n_sims = int(record.detail.get("n_simulations") or self._ensemble_config.n_simulations)
+        from eosp.services.forecast import build_forecast
+
+        forecast = build_forecast(
+            scenario_name,
+            inference,
+            n_simulations=n_sims,
+            cases=cases,
+            index_case_id=idx,
+            rng_seed=self._ensemble_config.rng_seed,
         )
+        if hasattr(self._repository, "cache_forecast"):
+            self._repository.cache_forecast(scenario_name, forecast)
+        record.detail["simulator"] = "hub_timeline"
+        record.detail["scenarios_refreshed"] = [scenario_name]
+        record.push_event({
+            "stage": "simulation",
+            "status": "complete",
+            "scenarios": [scenario_name],
+            "n_simulations": n_sims,
+        })
 
     def _run_full_refresh(self, record: JobRecord, trigger: TriggerType) -> None:
         cases = self._load_cases()
@@ -277,14 +299,36 @@ class JobManager:
             "chain_rhat": list(diag["rhat"].values()) if diag.get("rhat") else [],
         })
 
+        from eosp.services.forecast import build_forecast
+
+        n_sims = int(record.detail.get("n_simulations") or self._ensemble_config.n_simulations)
+        scenarios_to_run: list[str] = record.detail.get("scenarios_requested") or list(self._scenarios.keys())
+        idx = get_settings().hub_index_case_id
+        refreshed: list[str] = []
+        for scen in scenarios_to_run:
+            if scen not in self._scenarios:
+                continue
+            forecast = build_forecast(
+                scen,
+                inference,
+                n_simulations=n_sims,
+                cases=cases,
+                index_case_id=idx,
+                rng_seed=self._ensemble_config.rng_seed,
+            )
+            if hasattr(self._repository, "cache_forecast"):
+                self._repository.cache_forecast(scen, forecast)
+            refreshed.append(scen)
+
         record.push_event({
             "stage": "simulation",
-            "status": "skipped",
-            "reason": "abm_removed",
-            "detail": "Monte Carlo engine removed; see docs/ABM_RETIREMENT.md",
+            "status": "complete",
+            "n_simulations": n_sims,
+            "scenarios": refreshed,
         })
-        record.detail["simulator"] = "removed"
-        record.detail["scenarios_refreshed"] = []
+        record.detail["simulator"] = "hub_timeline"
+        record.detail["scenarios_refreshed"] = refreshed
+        record.detail["n_simulations"] = n_sims
 
     def _load_cases(self) -> list[CaseRecord]:
         try:

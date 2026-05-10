@@ -1,33 +1,73 @@
+from __future__ import annotations
+
 from datetime import date
+from typing import TYPE_CHECKING
 
 from eosp.core.models import ForecastResponse, ForecastRunItem, InferenceResult, ScenarioComparison, ScenarioComparisonItem
 
-_FORECAST_CACHE: dict[tuple[str, str, int], ForecastResponse] = {}
+if TYPE_CHECKING:
+    from eosp.core.models import CaseRecord
+
+_FORECAST_CACHE: dict[tuple[str, str, int, str, int], ForecastResponse] = {}
 
 FULL_SIMULATIONS = 10000
 
-_SIMULATOR_REMOVED_MSG = (
-    "The legacy ABM Monte Carlo simulator was removed. See docs/ABM_RETIREMENT.md. "
-    "Wire a new forward model into forecast.build_forecast / JobManager to repopulate caches."
-)
 
+def build_forecast(
+    scenario: str,
+    inference: InferenceResult,
+    n_simulations: int = FULL_SIMULATIONS,
+    *,
+    cases: list[CaseRecord] | None = None,
+    index_case_id: str | None = None,
+    rng_seed: int | None = None,
+) -> ForecastResponse:
+    from eosp.core.compute_config import EnsembleConfig
+    from eosp.services.hub_timeline.ensemble import run_hub_timeline_forecast
 
-class SimulatorRemovedError(RuntimeError):
-    """Raised when code attempts to run on-demand simulation after ABM removal."""
+    if cases is None:
+        raise ValueError("cases are required to build a hub timeline forecast")
 
-    def __init__(self, message: str = _SIMULATOR_REMOVED_MSG) -> None:
-        super().__init__(message)
+    ec = EnsembleConfig()
+    seed = int(rng_seed if rng_seed is not None else ec.rng_seed)
+    cache_key = (scenario, inference.version, int(n_simulations), index_case_id or "", seed)
+    if cache_key in _FORECAST_CACHE:
+        return _FORECAST_CACHE[cache_key]
 
-
-def build_forecast(scenario: str, inference: InferenceResult, n_simulations: int = FULL_SIMULATIONS) -> ForecastResponse:
-    _ = scenario, inference, n_simulations
-    raise SimulatorRemovedError()
+    response = run_hub_timeline_forecast(
+        scenario_name=scenario,
+        cases=cases,
+        inference=inference,
+        n_simulations=int(n_simulations),
+        rng_seed=seed,
+        index_case_id=index_case_id,
+    )
+    _FORECAST_CACHE[cache_key] = response
+    return response
 
 
 def run_forecast_engine(
-    scenario: str, inference: InferenceResult, n_simulations: int = FULL_SIMULATIONS
+    scenario: str,
+    inference: InferenceResult,
+    n_simulations: int = FULL_SIMULATIONS,
+    *,
+    cases: list[CaseRecord] | None = None,
+    index_case_id: str | None = None,
+    rng_seed: int | None = None,
 ) -> tuple[ForecastRunItem, ForecastResponse]:
-    raise SimulatorRemovedError()
+    from eosp.services.hub_timeline.ensemble import run_forecast_simulation
+
+    if cases is None:
+        raise ValueError("cases are required to run the hub timeline forecast engine")
+
+    return run_forecast_simulation(
+        scenario=scenario,
+        inference=inference,
+        cases=cases,
+        n_simulations=n_simulations,
+        index_case_id=index_case_id,
+        rng_seed=rng_seed,
+    )
 
 
 class ForecastNotCachedError(LookupError):

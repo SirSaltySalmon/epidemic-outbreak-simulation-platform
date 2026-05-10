@@ -61,5 +61,5 @@ eosp = [
 eosp-researcher-gui = "eosp.tools.researcher_gui:main"
 
 [tool.vercel]
-# ASGI app lives under the eosp package (app/eosp/main.py), not a default file name.
-entrypoint = "app.eosp.main:app"
+# After `pip install .`, setuptools exposes package `eosp` (see package-dir), not `app.eosp`.
+entrypoint = "eosp.main:app"

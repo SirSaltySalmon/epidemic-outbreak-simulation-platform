@@ -48,6 +48,13 @@ package-dir = {"" = "app"}
 [tool.setuptools.packages.find]
 where = ["app"]
 
+# Runtime JSON under app/eosp/data (scenarios, spawn profile, geo refs, etc.) must ship in the wheel/Docker image.
+[tool.setuptools.package-data]
+eosp = [
+    "data/*.json",
+    "data/bundles/*.json",
+]
+
 [tool.vercel]
 # ASGI app lives under the eosp package (app/eosp/main.py), not a default file name.
 entrypoint = "app.eosp.main:app"

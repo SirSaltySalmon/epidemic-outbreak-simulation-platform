@@ -6,7 +6,7 @@
       "public_label": "Baseline",
       "similar_to": "No added intervention; reference mobility.",
       "description": "Hub-timeline forward simulation with inferred transmission and disease parameters and default contact / load / mobility settings from the scenario ``hub_timeline`` block.",
-      "technical_explanation": "The hub-timeline kernel (``eosp.services.hub_timeline``) runs a calendar-anchored Monte Carlo: negative-binomial contact draws at hubs (μ_travel / μ_stay / onset burst from ``hub_timeline.contacts``), load-dependent transmission via ``load.alpha`` on effective infectious weight L, and Markov hub mobility (``mobility``). Posterior means for p_transmit, h2h_multiplier, cfr, incubation feed per-trajectory draws; ``contacts_daily`` scales the contact means relative to the config baseline. ``parameter_overrides`` and ``network_modifications`` are empty — no extra scaling.",
+      "technical_explanation": "The hub-timeline kernel (``eosp.services.hub_timeline``) runs a calendar-anchored Monte Carlo: negative-binomial contact draws at hubs (μ_travel / μ_stay / onset burst from ``hub_timeline.contacts``), load-dependent transmission via ``load.alpha`` on effective infectious weight L, and Markov hub mobility (``mobility``). Posterior means for p_transmit, h2h_multiplier, cfr, incubation feed per-trajectory draws. Contact volumes are explicit in ``hub_timeline.contacts``, not scaled by inferred ``contacts_daily``. ``parameter_overrides`` and ``network_modifications`` are empty — no extra scaling.",
       "network_modifications": {},
       "parameter_overrides": {},
       "hub_timeline": {
@@ -37,16 +37,14 @@
       "name": "reduced_travel_connectivity",
       "public_label": "Restricted travel",
       "similar_to": "Lighter travel and fewer effective connections.",
-      "description": "Lower inferred mean ``contacts_daily`` before scenario scaling shrinks effective μ_travel / μ_stay / onset-burst contacts for the hub kernel.",
-      "technical_explanation": "``parameter_overrides.contacts_daily`` lowers the posterior mean feeding ``contacts_daily`` in ``_scenario_config``; ensemble rescales hub_timeline μ values by scenario_cd / baseline_contacts_daily. Network graph for hub mobility still comes from OpenFlights routes; no itinerary_patch multiplier unless added in JSON.",
+      "description": "Explicitly lower hub contact Poisson means and slightly tighter mobility in ``hub_timeline`` to represent lighter travel (same narrative as the old contacts_daily scale).",
+      "technical_explanation": "Contact means and load are set in ``hub_timeline`` (μ values preserve the former 1.75 / 4.0 scale vs baseline as an explicit scenario choice, not an inferred posterior side effect). Network graph for hub mobility still comes from OpenFlights routes.",
       "network_modifications": {},
-      "parameter_overrides": {
-        "contacts_daily": 1.75
-      },
+      "parameter_overrides": {},
       "hub_timeline": {
-        "contacts": { "mu_travel": 20, "mu_stay": 5, "mu_onset_burst": 20, "r_dispersion": 8.0 },
+        "contacts": { "mu_travel": 8.75, "mu_stay": 2.2, "mu_onset_burst": 8.75, "r_dispersion": 8.0 },
         "load": { "alpha": 0.08 },
-        "mobility": { "p_stay_when_at_home": 0.7, "p_return_when_away": 0.7 }
+        "mobility": { "p_stay_when_at_home": 0.82, "p_return_when_away": 0.82 }
       },
       "ui_color": "rgb(185,91,53)"
     },

@@ -26,13 +26,48 @@ const LAYOUT = {
 
 const CONFIG = { displayModeBar: false, responsive: true };
 
+/**
+ * Simulation horizon length in days (not the number of points in a compact bundle).
+ *
+ * @param {any} forecast — API ``ForecastResponse`` shape
+ * @returns {number|null}
+ */
+export function forecastHorizonDays(forecast) {
+  const m = forecast?.metadata;
+  if (!m || typeof m !== "object") {
+    const n = forecast?.forecast?.length;
+    return typeof n === "number" && n > 0 ? n : null;
+  }
+  if (typeof m.horizon_days === "number") return m.horizon_days;
+  const sht = m.scenario_hub_timeline;
+  if (sht && typeof sht.horizon_days === "number") return sht.horizon_days;
+  const gfm = m.geo_forecast?.metadata;
+  if (gfm && typeof gfm.n_days === "number") return gfm.n_days;
+  const n = forecast?.forecast?.length;
+  return typeof n === "number" && n > 0 ? n : null;
+}
+
+/** Plotly filled bands need at least two x values; duplicate a single-day forecast. */
+function _padSinglePointSeries(dates, ...series) {
+  if (dates.length !== 1) return { dates, series };
+  const d0 = dates[0];
+  return {
+    dates: [d0, d0],
+    series: series.map((arr) => [arr[0], arr[0]]),
+  };
+}
+
 export function renderForecast(containerId, forecast, prevForecast) {
-  const dates = forecast.forecast.map((p) => p.date);
-  const med    = forecast.forecast.map((p) => p.cases_cumulative.median);
-  const ci95lo = forecast.forecast.map((p) => p.cases_cumulative.ci_95_lower);
-  const ci95hi = forecast.forecast.map((p) => p.cases_cumulative.ci_95_upper);
-  const ci50lo = forecast.forecast.map((p) => p.cases_cumulative.ci_50_lower ?? p.cases_cumulative.median);
-  const ci50hi = forecast.forecast.map((p) => p.cases_cumulative.ci_50_upper ?? p.cases_cumulative.median);
+  let dates = forecast.forecast.map((p) => p.date);
+  let med    = forecast.forecast.map((p) => p.cases_cumulative.median);
+  let ci95lo = forecast.forecast.map((p) => p.cases_cumulative.ci_95_lower);
+  let ci95hi = forecast.forecast.map((p) => p.cases_cumulative.ci_95_upper);
+  let ci50lo = forecast.forecast.map((p) => p.cases_cumulative.ci_50_lower ?? p.cases_cumulative.median);
+  let ci50hi = forecast.forecast.map((p) => p.cases_cumulative.ci_50_upper ?? p.cases_cumulative.median);
+
+  const padded = _padSinglePointSeries(dates, med, ci95lo, ci95hi, ci50lo, ci50hi);
+  dates = padded.dates;
+  [med, ci95lo, ci95hi, ci50lo, ci50hi] = padded.series;
 
   const traces = [
     // 95% CI lower (invisible base for fill)
@@ -57,8 +92,11 @@ export function renderForecast(containerId, forecast, prevForecast) {
 
   // Previous version median (dashed grey)
   if (prevForecast) {
-    const prevMed = prevForecast.forecast.map((p) => p.cases_cumulative.median);
-    const prevDates = prevForecast.forecast.map((p) => p.date);
+    let prevMed = prevForecast.forecast.map((p) => p.cases_cumulative.median);
+    let prevDates = prevForecast.forecast.map((p) => p.date);
+    const pp = _padSinglePointSeries(prevDates, prevMed);
+    prevDates = pp.dates;
+    prevMed = pp.series[0];
     traces.push({
       x: prevDates, y: prevMed, type: "scatter", mode: "lines",
       line: { color: "#4a7a72", width: 1, dash: "dash" },
@@ -75,11 +113,11 @@ export function renderForecast(containerId, forecast, prevForecast) {
       const m = Math.round(last.cases_cumulative.median);
       const lo = Math.round(last.cases_cumulative.ci_95_lower);
       const hi = Math.round(last.cases_cumulative.ci_95_upper);
-      const metaH =
-        forecast.metadata && typeof forecast.metadata.horizon_days === "number"
-          ? forecast.metadata.horizon_days
-          : forecast.forecast.length;
-      const lastDayIdx = typeof last.day === "number" ? last.day : forecast.forecast.length;
+      const metaH = forecastHorizonDays(forecast) ?? forecast.forecast.length;
+      const lastDayIdx =
+        typeof last.day === "number"
+          ? last.day
+          : forecastHorizonDays(forecast) ?? forecast.forecast.length;
       expl.textContent = `Day ${lastDayIdx} of ${metaH} · median ${m} cumulative cases · 95% CI ${lo}–${hi}.`;
     }
   }

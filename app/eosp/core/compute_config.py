@@ -30,6 +30,17 @@ class InferenceConfig:
     rng_seed: int = 20260507
     persist_netcdf: bool = True
     posteriors_dir: Path | None = None
-    #: When set, :func:`run_inference` uses this instead of ``network.degree_summary()``
-    #: so callers can skip building a :class:`~eosp.services.network.ContactNetwork`.
+    #: Optional legacy ship/itinerary summary. Hub-surrogate v2 inference ignores
+    #: ``mean_weighted_degree`` and related keys; kept so old env-based configs
+    #: do not crash.
     network_summary: dict[str, float] | None = None
+    inference_model: str = "hub_surrogate_v2"
+    p_transmit_prior_alpha: float = 1.0
+    p_transmit_prior_beta: float = 80.0
+    h2h_log_sigma: float = 0.25
+    cfr_prior_alpha: float = 2.0
+    cfr_prior_beta: float = 50.0
+    background_onset_mean: float = 0.35
+    background_onset_concentration: float = 2.0
+    reporting_fraction_alpha: float = 8.0
+    reporting_fraction_beta: float = 2.0

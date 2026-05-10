@@ -23,7 +23,9 @@ def test_run_inference_produces_summary_and_diagnostics(tmp_path):
     artifacts = run_inference(cases=list(CASES), network=network, config=config)
     result = artifacts.result
 
-    expected_params = {"p_transmit", "contacts_daily", "incubation", "h2h_multiplier", "cfr"}
+    expected_params = {"p_transmit", "incubation", "h2h_multiplier", "cfr", "reporting_fraction", "background_onset_rate"}
+    unexpected_params = {"contacts_daily"}
+    assert unexpected_params.isdisjoint(result.parameters.keys())
     assert expected_params.issubset(result.parameters.keys())
     for name in expected_params:
         estimate = result.parameters[name]
@@ -52,7 +54,7 @@ def test_inference_artifacts_contain_posterior_samples(tmp_path):
     assert samples["p_transmit"].min() >= 0.0
 
 
-def test_run_inference_with_static_network_summary_skips_graph(tmp_path):
+def test_run_inference_with_legacy_network_summary_is_accepted_for_compatibility(tmp_path):
     config = InferenceConfig(
         num_warmup=80,
         num_samples=80,

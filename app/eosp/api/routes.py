@@ -1,5 +1,6 @@
 import asyncio
 import json
+from enum import Enum
 from typing import Any
 from uuid import UUID
 
@@ -80,7 +81,7 @@ def _inference_versions_dicts(repo: Any, limit: int) -> list[dict[str, Any]]:
 
 
 def _geo_simulation_context(repo: Any) -> tuple[float, str | None, dict[str, Any] | None, int | None, str | None]:
-    p_transmit = 1.5 / 21.5
+    p_transmit = 1.0 / 81.0
     inference_version: str | None = None
     inference = None
     try:
@@ -210,6 +211,39 @@ def health(request: Request) -> dict[str, object]:
 _DEFAULT_BOOTSTRAP_SCENARIOS = "baseline,terminal_distancing,reduced_travel_connectivity,enhanced_case_isolation"
 
 
+class TimelineBootstrapDetail(str, Enum):
+    """Bootstrap forecast payload shape for the dashboard bundle."""
+
+    compact = "compact"
+    full = "full"
+
+
+def _compact_forecast_bootstrap_dict(d: dict[str, Any]) -> bool:
+    """Trim multi-day timeline fields to the final day only. Mutates ``d`` (a forecast JSON dict)."""
+
+    changed = False
+    fc_list = d.get("forecast")
+    if isinstance(fc_list, list) and len(fc_list) > 1:
+        d["forecast"] = [fc_list[-1]]
+        changed = True
+    meta = d.get("metadata")
+    if not isinstance(meta, dict):
+        return changed
+    gf = meta.get("geo_forecast")
+    if isinstance(gf, dict):
+        by_day = gf.get("by_day")
+        if isinstance(by_day, list) and len(by_day) > 1:
+            meta["geo_forecast"] = {**gf, "by_day": [by_day[-1]]}
+            changed = True
+    rg = meta.get("replay_geo")
+    if isinstance(rg, dict):
+        days = rg.get("days")
+        if isinstance(days, list) and len(days) > 1:
+            meta["replay_geo"] = {**rg, "days": [days[-1]]}
+            changed = True
+    return changed
+
+
 @router.get("/dashboard/bootstrap")
 def dashboard_bootstrap(
     request: Request,
@@ -220,6 +254,10 @@ def dashboard_bootstrap(
     version_limit: int = Query(default=2, ge=1, le=50),
     risk_model: str | None = Query(default=None),
     metapop_runs: int | None = Query(default=None, ge=1, le=5000),
+    timeline_detail: TimelineBootstrapDetail = Query(
+        default=TimelineBootstrapDetail.compact,
+        description="compact: final simulation day only in bundled forecasts (smaller payload); full: entire timeline in one response.",
+    ),
 ) -> dict[str, Any]:
     """One round-trip for the public dashboard: shared case read + geo + forecasts."""
 
@@ -276,12 +314,25 @@ def dashboard_bootstrap(
         except ForecastNotCachedError as exc:
             errors["scenarios"] = _no_simulation_results_detail(exc.scenario)
 
+    forecast_baseline_json: dict[str, Any] | None = None
+    forecast_prev_json: dict[str, Any] | None = None
+    forecast_timeline_compact = False
+    if forecast_baseline is not None:
+        forecast_baseline_json = forecast_baseline.model_dump(mode="json")
+        if timeline_detail == TimelineBootstrapDetail.compact:
+            forecast_timeline_compact = _compact_forecast_bootstrap_dict(forecast_baseline_json)
+    if forecast_prev is not None:
+        forecast_prev_json = forecast_prev.model_dump(mode="json")
+        if timeline_detail == TimelineBootstrapDetail.compact:
+            _compact_forecast_bootstrap_dict(forecast_prev_json)
+
     return {
         "summary": summary.model_dump(mode="json"),
         "cases": [c.model_dump(mode="json") for c in cases],
         "geo": geo,
-        "forecast_baseline": forecast_baseline.model_dump(mode="json") if forecast_baseline else None,
-        "forecast_baseline_prev": forecast_prev.model_dump(mode="json") if forecast_prev else None,
+        "forecast_baseline": forecast_baseline_json,
+        "forecast_baseline_prev": forecast_prev_json,
+        "forecast_timeline_compact": forecast_timeline_compact,
         "versions": {"versions": version_dicts},
         "scenarios": scenarios_payload.model_dump(mode="json") if scenarios_payload else None,
         "scenario_catalog": scenario_catalog_for_api(),

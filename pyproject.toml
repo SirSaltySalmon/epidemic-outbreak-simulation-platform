@@ -42,6 +42,7 @@ pythonpath = ["app"]
 testpaths = ["tests"]
 markers = [
     "integration: tests that touch network / external services (opt-in)",
+    "slow: longer MCMC or forecast runs (opt-in)",
 ]
 
 [tool.setuptools]

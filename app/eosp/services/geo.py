@@ -1,9 +1,8 @@
 """Assembles the geo/outbreak response for the Leaflet world map.
 
-Reads ``spawn_profile.json`` and ``flight_schedules_baseline.json`` for ship /
-evacuation map overlays, enriches with bundled airport coordinates, and builds
-heatmap layers from the cached ABM ``geo_forecast`` block on the baseline
-forecast (ensemble bucket medians).
+Reads ``spawn_profile.json`` for the ship marker, enriches with bundled airport
+coordinates, and builds heatmap layers from the cached ABM ``geo_forecast`` block
+on the baseline forecast (ensemble bucket medians).
 
 Case markers come from ingested ``CaseRecord`` rows only. If no baseline
 forecast or ``geo_forecast`` is available yet, the primary heat layer is empty
@@ -18,7 +17,6 @@ from eosp.core.models import CaseRecord, CaseStatus, ObservationKind
 from eosp.services.patch_codes import iata_from_destination
 from eosp.services.reference_geo import load_airport_coords
 
-from eosp.services.schedule_baseline import load_baseline_schedule
 from eosp.services.world_builder import load_spawn_profile
 
 _ABM_GEO_UNAVAILABLE_SOURCE = "abm_geo_unavailable"
@@ -200,13 +198,12 @@ def build_geo_bundle(
     """Assemble the unified geo_bundle payload (see docs/spec geo-bundle map API)."""
 
     spawn = load_spawn_profile()
-    baseline = load_baseline_schedule()
     coords = load_airport_coords()
     ui = spawn.get("ui") or {}
     ship_lat = float(ui.get("lat", 20.5))
     ship_lng = float(ui.get("lng", -21.0))
     ship_name = str((spawn.get("ship") or {}).get("name", "MV Hondius"))
-    ship_status = str(ui.get("status", "en_route_tenerife"))
+    ship_status = str(ui.get("status", "en route Canary Islands"))
     ship = {
         "lat": ship_lat,
         "lng": ship_lng,
@@ -214,23 +211,6 @@ def build_geo_bundle(
         "status": ship_status,
     }
     confirmed_cases = _case_markers_from_records(cases, coords)
-    evacuation_flights: list[dict[str, Any]] = []
-    for flight in baseline.get("flights") or []:
-        dest_code = str(flight.get("destination_code") or flight.get("destination", ""))
-        iata = iata_from_destination(dest_code)
-        dest_coords = coords.get(iata)
-        if dest_coords is None:
-            continue
-        evacuation_flights.append({
-            "name": str(flight.get("name") or flight.get("key", "")),
-            "from_lat": ship_lat,
-            "from_lng": ship_lng,
-            "to_lat": dest_coords["lat"],
-            "to_lng": dest_coords["lng"],
-            "to_airport": iata,
-            "depart_day": flight.get("depart_day", 0),
-            "passengers": flight.get("n_passengers", 0),
-        })
 
     errors: list[dict[str, Any]] = []
     sim_extra: dict[str, Any] = {
@@ -355,7 +335,6 @@ def build_geo_bundle(
         "observed": {"case_markers": confirmed_cases, "ingest_cursor": None},
         "simulation": simulation,
         "provenance": provenance,
-        "evacuation_flights": evacuation_flights,
         "ship": ship,
         "errors": errors,
     }
@@ -374,7 +353,6 @@ def outbreak_dict_from_geo_bundle(bundle: dict[str, Any]) -> dict[str, Any]:
     return {
         "ship": bundle["ship"],
         "confirmed_cases": bundle["observed"]["case_markers"],
-        "evacuation_flights": bundle["evacuation_flights"],
         "risk_heatmap": risk_heatmap,
         "metadata": meta,
     }

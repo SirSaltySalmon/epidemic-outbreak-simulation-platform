@@ -1,11 +1,9 @@
-"""Bayesian inference for outbreak parameters (FR-2.1).
+"""Bayesian inference for outbreak parameters (hub-surrogate v2).
 
-NumPyro NUTS over the seeded case timeline. Priors match the PRD FR-2.1 table
-exactly (Beta(1.5, 20) on ``p_transmit``, Gamma(2, 0.25) on ``incubation``,
-LogNormal(0, 0.5) on ``h2h_multiplier``). The likelihood maps the parameters
-to expected daily symptom-onset counts via a closed-form next-generation
-operator over the contact-network's mean weighted degree, avoiding the
-prohibitive cost of running the stochastic ABM inside MCMC.
+NumPyro NUTS over the seeded case timeline with a deterministic mean-field
+likelihood aligned to the hub-timeline kernel: calendar forcing from observed
+cases, load-scaled per-contact risk, and nuisance terms for background onsets
+and reporting. ``p_transmit`` is per casual hub contact (low Beta prior).
 
 NumPyro and JAX are imported lazily so the rest of the service module graph
 stays importable even when those heavy CPU wheels are not yet installed.
@@ -15,7 +13,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from typing import Any, Iterable
 
@@ -31,6 +29,8 @@ from eosp.core.models import (
     ParameterEstimate,
     TriggerType,
 )
+from eosp.services.hub_timeline.config import default_hub_timeline_config
+from eosp.services.hub_timeline.inference_surrogate import build_hub_surrogate_features
 from eosp.services.network import ContactNetwork
 
 
@@ -78,13 +78,9 @@ def run_inference(
 ) -> InferenceArtifacts:
     """Fit the EOSP Bayesian model with NUTS and return ``InferenceArtifacts``.
 
-    ``previous_inference`` is currently used only to derive informative-prior
-    centers in the next call (FR-2.1 step 3); the priors below stay weakly
-    informative on the first run.
-
-    Supply ``InferenceConfig.network_summary`` (e.g. ``mean_weighted_degree``) to
-    run without a :class:`~eosp.services.network.ContactNetwork`; otherwise pass
-    ``network`` so NUTS can call ``degree_summary()``.
+    Hub-surrogate v2 does not require a :class:`~eosp.services.network.ContactNetwork`.
+    Optional ``network`` / ``InferenceConfig.network_summary`` are accepted for
+    compatibility and recorded in diagnostics when ignored.
     """
 
     config = config or InferenceConfig()
@@ -96,16 +92,16 @@ def run_inference(
     start = start_date or inferred_start
     counts = daily_onsets_from_cases(sorted_cases, start, n_days)
 
-    if config.network_summary is not None:
-        network_summary = dict(config.network_summary)
-    elif network is not None:
-        network_summary = network.degree_summary()
-    else:
-        raise ValueError(
-            "run_inference requires a ContactNetwork, or set InferenceConfig.network_summary "
-            "(e.g. mean_weighted_degree) to run without building the itinerary graph."
-        )
-    posterior_samples = _run_nuts(counts=counts, network_summary=network_summary, config=config)
+    if config.inference_model != "hub_surrogate_v2":
+        raise ValueError(f"Unsupported inference_model: {config.inference_model!r}")
+
+    if network is not None:
+        logger.debug("run_inference: ContactNetwork ignored for hub_surrogate_v2 likelihood")
+
+    hub_cfg = default_hub_timeline_config()
+    sim_days = [start + timedelta(days=i) for i in range(n_days)]
+    features = build_hub_surrogate_features(sorted_cases, sim_days=sim_days, config=hub_cfg)
+    posterior_samples = _run_nuts(counts=counts, features=features, config=config)
 
     parameter_estimates = _summarize(posterior_samples)
     diagnostics = _diagnostics(posterior_samples, config=config)
@@ -145,6 +141,9 @@ def run_inference(
             "n_chains": config.num_chains,
             "data_quality_mean": dq_mean,
             "n_observation_rows": len(sorted_cases),
+            "inference_model": config.inference_model,
+            "network_summary_ignored": config.network_summary is not None
+            and config.inference_model == "hub_surrogate_v2",
         },
         posterior_download_url=netcdf_path or f"local://posteriors/{version}.nc",
     )
@@ -159,7 +158,7 @@ def run_inference(
 def _run_nuts(
     *,
     counts: Any,
-    network_summary: dict[str, float],
+    features: Any,
     config: InferenceConfig,
 ) -> dict[str, Any]:
     np = _require_numpy()
@@ -178,25 +177,52 @@ def _run_nuts(
     numpyro.set_host_device_count(max(1, config.num_chains))
 
     observed = jnp.asarray(counts)
-    mean_weighted_degree = float(network_summary.get("mean_weighted_degree", 1.0))
+    fixed_load = jnp.asarray(features.fixed_load_by_day, dtype=jnp.float32)
+    fixed_mu = jnp.asarray(features.fixed_contact_mu_by_day, dtype=jnp.float32)
     n_days = int(counts.shape[0])
+    delay = int(features.incubation_delay_days)
+    infectious_days = int(features.generated_infectious_duration_days)
+    gen_contact_mu = float(features.generated_contact_mu)
+    alpha_load_f = float(features.alpha_load)
 
     def model(observed_daily: jnp.ndarray) -> None:
-        p_transmit = numpyro.sample("p_transmit", dist.Beta(1.5, 20.0))
-        contacts_daily = numpyro.sample("contacts_daily", dist.Gamma(2.5, 1.0))
+        p_transmit = numpyro.sample(
+            "p_transmit",
+            dist.Beta(float(config.p_transmit_prior_alpha), float(config.p_transmit_prior_beta)),
+        )
         incubation = numpyro.sample("incubation", dist.Gamma(2.0, 0.25))
-        h2h_multiplier = numpyro.sample("h2h_multiplier", dist.LogNormal(0.0, 0.5))
-        cfr = numpyro.sample("cfr", dist.Beta(8.0, 12.0))
+        h2h_multiplier = numpyro.sample("h2h_multiplier", dist.LogNormal(0.0, float(config.h2h_log_sigma)))
+        cfr = numpyro.sample("cfr", dist.Beta(float(config.cfr_prior_alpha), float(config.cfr_prior_beta)))
+        reporting_fraction = numpyro.sample(
+            "reporting_fraction",
+            dist.Beta(float(config.reporting_fraction_alpha), float(config.reporting_fraction_beta)),
+        )
+        background_onset_rate = numpyro.sample(
+            "background_onset_rate",
+            dist.Gamma(
+                float(config.background_onset_concentration),
+                float(config.background_onset_concentration) / float(config.background_onset_mean),
+            ),
+        )
         concentration = numpyro.sample("concentration", dist.Gamma(2.0, 0.5))
-        initial_rate = numpyro.sample("initial_rate", dist.HalfNormal(2.0))
 
-        effective_contact_rate = contacts_daily + 0.4 * mean_weighted_degree
-        r_eff = p_transmit * h2h_multiplier * effective_contact_rate
-        generation_interval = jnp.maximum(incubation, 1.0)
-        growth_rate = jnp.log(jnp.maximum(r_eff, 1e-3)) / generation_interval
+        generated_load = jnp.zeros(n_days, dtype=jnp.float32)
+        generated_onsets = jnp.zeros(n_days, dtype=jnp.float32)
 
-        days = jnp.arange(observed_daily.shape[0], dtype=jnp.float32)
-        expected = jnp.exp(jnp.log(jnp.maximum(initial_rate, 1e-3)) + growth_rate * days)
+        for day_i in range(n_days):
+            load_eff = fixed_load[day_i] + generated_load[day_i]
+            contact_mu = fixed_mu[day_i] + generated_load[day_i] * gen_contact_mu
+            per_contact = 1.0 - jnp.exp(
+                -p_transmit * h2h_multiplier * (1.0 + alpha_load_f * jnp.maximum(load_eff, 0.0))
+            )
+            expected_infections = contact_mu * per_contact
+            onset_i = day_i + delay
+            if onset_i < n_days:
+                generated_onsets = generated_onsets.at[onset_i].add(expected_infections)
+                for active_i in range(onset_i, min(n_days, onset_i + infectious_days)):
+                    generated_load = generated_load.at[active_i].add(expected_infections)
+
+        expected = background_onset_rate + reporting_fraction * generated_onsets
         expected = jnp.maximum(expected, 0.05)
         numpyro.sample(
             "obs",
@@ -224,7 +250,7 @@ def _summarize(samples: dict[str, Any]) -> dict[str, ParameterEstimate]:
     np = _require_numpy()
     summary: dict[str, ParameterEstimate] = {}
     for name, draws in samples.items():
-        if name == "concentration" or name == "initial_rate":
+        if name == "concentration":
             continue
         flat = np.asarray(draws).reshape(-1)
         summary[name] = ParameterEstimate(

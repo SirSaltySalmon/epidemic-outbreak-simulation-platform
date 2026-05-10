@@ -4,7 +4,7 @@
  */
 import { get } from "./api.js";
 import { initMap, renderGeoData } from "./map.js";
-import { renderForecast, purgeForecastChart } from "./chart.js";
+import { renderForecast, purgeForecastChart, forecastHorizonDays } from "./chart.js";
 import { renderScenarios, SCENARIOS_COMPARE_QUERY, scenarioMetaFromCatalog } from "./scenarios.js";
 import { initAuth } from "./auth.js";
 import { initDrawer, notifyDrawerOpened } from "./drawer.js";
@@ -12,7 +12,14 @@ import { applyCasesList } from "./cases.js";
 import { applyTopbarUpdatedFromSummary } from "./topbar-updated.js";
 
 const _DASHBOARD_BOOTSTRAP =
-  "/dashboard/bootstrap?" + SCENARIOS_COMPARE_QUERY + "&version_limit=2";
+  "/dashboard/bootstrap?" +
+  SCENARIOS_COMPARE_QUERY +
+  "&version_limit=2&timeline_detail=compact";
+
+let _summaryKpiPollStarted = false;
+/** Latest bootstrap payload for optional full-timeline fetch (user-initiated). */
+let _timelineBootstrapSnapshot = null;
+let _loadFullTimelineWired = false;
 
 async function boot() {
   const authPromise = initAuth();
@@ -72,17 +79,22 @@ function _hydrateScenarioExplanations(catalog) {
 
 /** @param {any} data — JSON from ``GET /api/v1/dashboard/bootstrap`` */
 function _applyDashboardBundle(data) {
+  _timelineBootstrapSnapshot = data;
+  _ensureLoadFullTimelineWired();
   _hydrateScenarioExplanations(data.scenario_catalog);
   const catalogMeta = scenarioMetaFromCatalog(data.scenario_catalog);
 
   if (data.summary) {
     _applySummaryKpis(data.summary);
-    setInterval(async () => {
-      try {
-        const fresh = await get("/cases/summary");
-        _applySummaryKpis(fresh);
-      } catch (_) {}
-    }, 60_000);
+    if (!_summaryKpiPollStarted) {
+      _summaryKpiPollStarted = true;
+      setInterval(async () => {
+        try {
+          const fresh = await get("/cases/summary");
+          _applySummaryKpis(fresh);
+        } catch (_) {}
+      }, 60_000);
+    }
   }
 
   const versions = data.versions;
@@ -96,17 +108,38 @@ function _applyDashboardBundle(data) {
   }
 
   const errForecast = data.errors?.forecast_baseline;
+  const compactPending =
+    !!data.forecast_timeline_compact && data.forecast_baseline && !errForecast;
   if (data.forecast_baseline && !errForecast) {
     _applyForecastHorizonUi(data.forecast_baseline);
-    renderForecast(
-      "forecast-chart",
-      data.forecast_baseline,
-      data.forecast_baseline_prev ?? null,
-    );
+    if (compactPending) {
+      renderForecast(
+        "forecast-chart",
+        data.forecast_baseline,
+        data.forecast_baseline_prev ?? null,
+      );
+      const expl = document.getElementById("chart-explanation");
+      if (expl) {
+        expl.textContent +=
+          ' Full day-by-day curve and map replay are optional: use "Load full timeline" (extra request).';
+      }
+      _setForecastTimelineLoading(false);
+      _setFullTimelineButtonVisible(true);
+    } else {
+      renderForecast(
+        "forecast-chart",
+        data.forecast_baseline,
+        data.forecast_baseline_prev ?? null,
+      );
+      _setForecastTimelineLoading(false);
+      _setFullTimelineButtonVisible(false);
+    }
     _applyForecastKpis(data.forecast_baseline, data.summary ?? null);
     _setText("chart-freshness", _forecastFreshnessLabel(data.forecast_baseline));
   } else {
     purgeForecastChart("forecast-chart");
+    _setForecastTimelineLoading(false);
+    _setFullTimelineButtonVisible(false);
     _setText("chart-freshness", "");
     _applyForecastHorizonUi(null);
     _applyForecastKpis(null, data.summary ?? null);
@@ -132,49 +165,13 @@ function _applyDashboardBundle(data) {
 function _onRunComplete() {
   get(_DASHBOARD_BOOTSTRAP, { cache: "no-store" })
     .then(async (data) => {
-      _hydrateScenarioExplanations(data.scenario_catalog);
-      const catalogMeta = scenarioMetaFromCatalog(data.scenario_catalog);
-      if (data.summary) {
-        _applySummaryKpis(data.summary);
-      }
-      const errForecast = data.errors?.forecast_baseline;
-      if (data.forecast_baseline && !errForecast) {
-        _applyForecastHorizonUi(data.forecast_baseline);
-        renderForecast("forecast-chart", data.forecast_baseline);
-        _applyForecastKpis(data.forecast_baseline, data.summary ?? null);
-        _setText("chart-freshness", _forecastFreshnessLabel(data.forecast_baseline));
-      } else {
-        purgeForecastChart("forecast-chart");
-        _setText("chart-freshness", "");
-        _applyForecastHorizonUi(null);
-        _applyForecastKpis(null, data.summary ?? null);
-        _setText(
-          "chart-explanation",
-          errForecast ? `Forecast not loaded: ${errForecast}` : "Forecast not loaded.",
-        );
-      }
-      const errScenarios = data.errors?.scenarios;
-      if (data.scenarios && !errScenarios) {
-        renderScenarios(data.scenarios, { catalogMeta });
-      } else {
-        renderScenarios(null, {
-          fetchError: errScenarios || "Scenario compare unavailable.",
-          catalogMeta,
-        });
-      }
+      _applyDashboardBundle(data);
       if (data.geo) {
         const m = data.forecast_baseline?.metadata ?? {};
         const gf = m.geo_forecast ?? null;
         const rg = m.replay_geo ?? null;
         await renderGeoData(data.geo, gf, rg);
       }
-      const versions = data.versions;
-      if (versions?.versions?.length) {
-        const v = versions.versions[0];
-        const badge = document.getElementById("version-badge");
-        if (badge) badge.textContent = v.version_id;
-      }
-      applyCasesList(Array.isArray(data.cases) ? data.cases : []);
     })
     .catch(() => {});
 }
@@ -206,6 +203,83 @@ function _wireDrawerToggle() {
   });
 }
 
+function _setForecastTimelineLoading(busy) {
+  const el = document.getElementById("forecast-timeline-loading");
+  if (!el) return;
+  el.hidden = !busy;
+  el.setAttribute("aria-busy", busy ? "true" : "false");
+}
+
+function _setFullTimelineButtonVisible(show) {
+  const btn = document.getElementById("btn-load-full-timeline");
+  if (!btn) return;
+  btn.hidden = !show;
+}
+
+function _ensureLoadFullTimelineWired() {
+  if (_loadFullTimelineWired) return;
+  const btn = document.getElementById("btn-load-full-timeline");
+  if (!btn) return;
+  _loadFullTimelineWired = true;
+  btn.addEventListener("click", () => {
+    const d = _timelineBootstrapSnapshot;
+    if (!d?.forecast_timeline_compact || d.errors?.forecast_baseline) return;
+    void _hydrateFullForecastTimeline(d);
+  });
+}
+
+/**
+ * User-initiated fetch: full baseline (and previous-version baseline) for chart + map replay.
+ * Default bootstrap stays compact so casual visitors do not trigger extra DB reads.
+ *
+ * @param {any} data bootstrap JSON
+ */
+async function _hydrateFullForecastTimeline(data) {
+  if (!data.forecast_timeline_compact || data.errors?.forecast_baseline) {
+    _setForecastTimelineLoading(false);
+    return;
+  }
+  const btn = document.getElementById("btn-load-full-timeline");
+  if (btn) btn.disabled = true;
+  _setForecastTimelineLoading(true);
+  try {
+    const fetches = [get("/forecasts/baseline")];
+    const vPrev = data.versions?.versions?.[1]?.version_id;
+    if (vPrev) {
+      fetches.push(
+        get("/forecasts/baseline?model_version=" + encodeURIComponent(vPrev)),
+      );
+    }
+    const results = await Promise.all(fetches);
+    const full = results[0];
+    const fullPrev = results[1] ?? null;
+    const errForecast = data.errors?.forecast_baseline;
+    if (full && !errForecast) {
+      _applyForecastHorizonUi(full);
+      renderForecast("forecast-chart", full, fullPrev);
+      _applyForecastKpis(full, data.summary ?? null);
+      _setText("chart-freshness", _forecastFreshnessLabel(full));
+      const meta = full.metadata ?? {};
+      const gf = meta.geo_forecast ?? null;
+      const rg = meta.replay_geo ?? null;
+      if (data.geo) {
+        await renderGeoData(data.geo, gf, rg);
+      }
+      _setFullTimelineButtonVisible(false);
+    }
+  } catch (_) {
+    const fb = data.forecast_baseline;
+    const fp = data.forecast_baseline_prev ?? null;
+    if (fb) {
+      renderForecast("forecast-chart", fb, fp);
+      _setText("chart-explanation", "Full timeline unavailable; showing last day from bundle.");
+    }
+  } finally {
+    _setForecastTimelineLoading(false);
+    if (btn) btn.disabled = false;
+  }
+}
+
 function _waitForLibs(attempts = 0) {
   return new Promise((resolve) => {
     if (typeof L !== "undefined" && typeof Plotly !== "undefined") return resolve();
@@ -221,10 +295,7 @@ function _setText(id, text) {
 
 /** @param {any} forecastResponse */
 function _applyForecastHorizonUi(forecastResponse) {
-  const h =
-    forecastResponse?.metadata && typeof forecastResponse.metadata.horizon_days === "number"
-      ? forecastResponse.metadata.horizon_days
-      : forecastResponse?.forecast?.length ?? null;
+  const h = forecastHorizonDays(forecastResponse);
   const chartH = document.getElementById("chart-heading-horizon");
   if (chartH) {
     chartH.textContent =

@@ -1,12 +1,12 @@
 /**
- * Leaflet world map: ship marker, case markers, evacuation flight arcs,
+ * Leaflet world map: ship marker, case markers,
  * global risk heatmap from GET /api/v1/geo/outbreak; optional replay from replay_geo.
  */
 
 import { get } from "./api.js";
 
 let _map = null;
-/** Always visible: ship, evacuation arcs. */
+/** Always visible: ship. */
 let _mapBaseGroup = null;
 /** Toggle: recorded case markers. */
 let _mapRecordedGroup = null;
@@ -23,7 +23,8 @@ let _lastGeoData = null;
 let _lastGeoForecast = null;
 let _lastReplayGeo = null;
 let _replayDayIndex = 0;
-let _replayMetric = "C";
+/** `"stock"` = cumulative hub stock; `"pressure"` = infectious presence (replay heat uses replay_geo C_median / A_median). */
+let _replayMetric = "stock";
 /** IATA upper -> {lat,lng} from bundled reference/airports once loaded. */
 let _replayRefCoordsPromise = null;
 let _replayControlsWired = false;
@@ -74,7 +75,6 @@ function _legacyShapeFromBundle(bundle) {
   return {
     ship: bundle.ship,
     confirmed_cases: bundle.observed.case_markers,
-    evacuation_flights: bundle.evacuation_flights,
     risk_heatmap,
     metadata: {
       ...bundle.provenance,
@@ -172,26 +172,25 @@ function _warmReplayCoords() {
 /** @type {Record<string, {lat: number, lng: number}>} */
 const _replayRefLatLng = {};
 
+function _normalizeReplayMetricValue() {
+  if (_replayMetric === "pressure" || _replayMetric === "A") _replayMetric = "pressure";
+  else _replayMetric = "stock";
+}
+
 function _ensureReplayControlsWired() {
   if (_replayControlsWired) return;
   const slider = document.getElementById("map-replay-day");
-  const cRadio = document.getElementById("map-replay-metric-c");
-  const aRadio = document.getElementById("map-replay-metric-a");
-  if (!slider || !cRadio || !aRadio) return;
+  const metricWrap = document.querySelector("#map-replay-controls .map-replay-metric");
+  if (!slider || !metricWrap) return;
   _replayControlsWired = true;
   slider.addEventListener("input", () => {
     _replayDayIndex = Number(slider.value) || 0;
     void _refreshReplayMapOverlays();
   });
-  cRadio.addEventListener("change", () => {
-    if (cRadio.checked) {
-      _replayMetric = "C";
-      void _refreshReplayMapOverlays();
-    }
-  });
-  aRadio.addEventListener("change", () => {
-    if (aRadio.checked) {
-      _replayMetric = "A";
+  metricWrap.addEventListener("change", (e) => {
+    const t = e.target;
+    if (t && t.name === "map-replay-metric") {
+      _replayMetric = t.value === "pressure" ? "pressure" : "stock";
       void _refreshReplayMapOverlays();
     }
   });
@@ -229,6 +228,7 @@ function _paintReplayGreenLayer() {
 }
 
 async function _refreshReplayMapOverlays() {
+  _normalizeReplayMetricValue();
   _updateReplayDateLabel();
   await _paintReplayOrangeHeat();
   _paintReplayGreenLayer();
@@ -262,7 +262,9 @@ async function _paintReplayOrangeHeat() {
   for (const [iataUpper, vals] of Object.entries(airports)) {
     const key = String(iataUpper).toUpperCase();
     const raw =
-      _replayMetric === "A" ? vals.A_median ?? vals.a_median : vals.C_median ?? vals.c_median;
+      _replayMetric === "pressure"
+        ? vals.A_median ?? vals.a_median
+        : vals.C_median ?? vals.c_median;
     if (raw == null || Number(raw) <= 0) continue;
     const ll = _airportLatLng(_lastGeoData, key) || _replayRefLatLng[key];
     if (!ll) continue;
@@ -297,8 +299,11 @@ async function _setupReplayUi(replayGeo) {
   slider.max = String(Math.max(days.length - 1, 0));
   _replayDayIndex = Math.max(days.length - 1, 0);
   slider.value = String(_replayDayIndex);
-  document.getElementById("map-replay-metric-c").checked = _replayMetric === "C";
-  document.getElementById("map-replay-metric-a").checked = _replayMetric === "A";
+  _normalizeReplayMetricValue();
+  const stockEl = document.getElementById("map-replay-metric-stock");
+  const pressureEl = document.getElementById("map-replay-metric-pressure");
+  if (stockEl) stockEl.checked = _replayMetric === "stock";
+  if (pressureEl) pressureEl.checked = _replayMetric === "pressure";
   await _refreshReplayMapOverlays();
 }
 
@@ -384,22 +389,6 @@ export async function renderGeoData(data, geoForecast, replayGeo = null) {
     _mapRecordedGroup.addLayer(m);
   }
 
-  for (const flight of data.evacuation_flights) {
-    const arc = _curvedLine(
-      [flight.from_lat, flight.from_lng],
-      [flight.to_lat, flight.to_lng],
-    );
-    const line = L.polyline(arc, {
-      color: "#9ccac6",
-      weight: 1.5,
-      opacity: 0.6,
-      dashArray: "6 4",
-    }).bindPopup(
-      `<strong>${flight.name}</strong><br>` + `${flight.passengers} passengers · Day ${flight.depart_day}`,
-    );
-    _mapBaseGroup.addLayer(line);
-  }
-
   const replayDays = !!(replayGeo && replayGeo.days && replayGeo.days.length) && _forecastGeoKernel(data);
   const controls = document.getElementById("map-replay-controls");
   if (!replayDays) {
@@ -420,8 +409,8 @@ export async function renderGeoData(data, geoForecast, replayGeo = null) {
       const label = z.city ? `${z.city} (${z.airport_iata})` : z.airport_iata;
       const countryLine = z.country ? `${z.country}<br>` : "";
       const layerCopy =
-        `Hub-timeline ensemble: median <strong>cumulative infected stock (metric&nbsp;C)</strong> ` +
-        `at last horizon day ≈ <strong>${raw.toFixed(2)}</strong>.<br>` +
+        `Hub-timeline ensemble: median <strong>hub stock</strong> ` +
+        `(cumulative infected at hub) at last horizon day ≈ <strong>${raw.toFixed(2)}</strong>.<br>` +
         `<em>Scenario Monte Carlo median — not a live flight tracker.</em>`;
       const m = L.circleMarker([z.lat, z.lng], {
         radius: 8,
@@ -449,8 +438,13 @@ function _airportLatLng(geoData, iata) {
   return null;
 }
 
-function _bucketCumulativeBlock(stats) {
+/** @param {"stock"|"pressure"} kind */
+function _ensembleBucketBlock(stats, kind) {
   if (!stats) return null;
+  if (kind === "pressure") {
+    const b = stats.infectious_I;
+    return b && typeof b.median === "number" ? b : null;
+  }
   if (typeof stats.median === "number") return stats;
   if (stats.cumulative_infected) return stats.cumulative_infected;
   return null;
@@ -459,21 +453,28 @@ function _bucketCumulativeBlock(stats) {
 const _GREEN_SIM_R_MIN = 3;
 const _GREEN_SIM_R_SPAN = 9;
 
-/** Green markers: hub stock metric C from ``geo_forecast.by_day`` (full daily series). */
+/** Green markers: hub stock or infectious pressure from ``geo_forecast.by_day`` (full daily series). */
 function _renderHubTimelineGreenLayer(data, geoForecast, byDayRow = null) {
   if (!_mapForecastGreenSubgroup) return;
   if (!geoForecast || !geoForecast.by_day || !geoForecast.by_day.length) return;
+  _normalizeReplayMetricValue();
   _mapForecastGreenSubgroup.clearLayers();
 
+  const kind = _replayMetric === "pressure" ? "pressure" : "stock";
   const dayRow = byDayRow || geoForecast.by_day[geoForecast.by_day.length - 1];
   const entries = Object.entries(dayRow.buckets || {}).filter(([k]) => k !== "ship");
   const positiveMedians = entries
-    .map(([, v]) => _bucketCumulativeBlock(v))
+    .map(([, v]) => _ensembleBucketBlock(v, kind))
     .filter((b) => b != null && Number(b.median) > 0)
     .map((b) => b.median);
   const mx = positiveMedians.length > 0 ? Math.max(...positiveMedians, 1) : 1;
+  const metricLabel = kind === "pressure" ? "infectious pressure" : "hub stock";
+  const metricExplain =
+    kind === "pressure"
+      ? "median infectious compartment at hub (ensemble)"
+      : "median cumulative infected at hub across compartments (ensemble)";
   for (const [code, stats] of entries) {
-    const block = _bucketCumulativeBlock(stats);
+    const block = _ensembleBucketBlock(stats, kind);
     if (!block || Number(block.median) <= 0) continue;
     const iata = code.includes("_") ? code.split("_").pop() : code;
     const ll = _airportLatLng(data, iata);
@@ -492,11 +493,11 @@ function _renderHubTimelineGreenLayer(data, geoForecast, byDayRow = null) {
       fillOpacity: 0.45,
     }).bindPopup(
       `<strong>Simulation · ${iata}</strong><br>` +
-        `Median hub stock metric <strong>C</strong> (E+P+I+H+R+D at hub), ` +
+        `<strong>${metricLabel}</strong> — ${metricExplain}, ` +
         `simulation day <strong>${dayRow.day}</strong> (${String(dayRow.date ?? "").slice(0, 10)}): ` +
         `<strong>${block.median}</strong><br>` +
         `95% CI: ${block.ci_95_lower}–${block.ci_95_upper}<br>` +
-        `<em>Green rings follow scrubbed calendar date via full geo buckets (metric C).</em>`,
+        `<em>Green rings match the Stock / Pressure control (and replay date when scrubbing).</em>`,
     );
     _mapForecastGreenSubgroup.addLayer(m);
   }
@@ -505,6 +506,7 @@ function _renderHubTimelineGreenLayer(data, geoForecast, byDayRow = null) {
 function _updateMapLegend(data, geoForecast, replayGeo) {
   if (!_mapLegendEl) _mapLegendEl = document.getElementById("map-legend");
   if (!_mapLegendEl) return;
+  _normalizeReplayMetricValue();
 
   let greenDayRow = geoForecast?.by_day?.length
     ? geoForecast.by_day[geoForecast.by_day.length - 1]
@@ -520,22 +522,34 @@ function _updateMapLegend(data, geoForecast, replayGeo) {
   const greenDate =
     greenDayRow != null && greenDayRow.date != null ? ` (${String(greenDayRow.date).slice(0, 10)})` : "";
 
-  const nTot = geoForecast?.by_day?.length ?? "";
+  const nTot =
+    geoForecast?.metadata?.n_days ?? geoForecast?.by_day?.length ?? "";
 
   let heatNote =
     data.metadata?.risk_heatmap_explanation ||
-    "Orange-red heat: hub-timeline ensemble median cumulative stock (metric C) at hubs when baseline forecast is cached.";
-  let fcHint =
-    _riskSource(data) === ABM_GEO_RISK_SOURCE
-      ? " Orange matches final-calendar-day C medians unless replay is scrubbed below."
-      : "";
+    "Orange-red heat: hub-timeline ensemble median hub stock at hubs when baseline forecast is cached.";
+  if (replayGeo?.days?.length && _forecastGeoKernel(data)) {
+    heatNote =
+      _replayMetric === "pressure"
+        ? "Orange-red heat: replay ensemble median infectious pressure at hubs for the selected calendar day."
+        : "Orange-red heat: replay ensemble median hub stock at hubs for the selected calendar day.";
+  }
+  let fcHint = "";
+  if (_riskSource(data) === ABM_GEO_RISK_SOURCE) {
+    if (replayGeo?.days?.length && _forecastGeoKernel(data)) fcHint = "";
+    else
+      fcHint =
+        " Orange matches final-calendar-day stock medians unless replay is scrubbed below.";
+  }
 
   let replayHint = "";
   if (replayGeo?.days?.length && _forecastGeoKernel(data))
     replayHint =
-      " Replay slider: scrub calendar days; toggle C vs A — orange heat follows replay sparse medians.";
+      " Replay: scrub days; Stock vs Pressure switches both orange heat and green rings (replay sparse medians for heat).";
+  const greenMetric =
+    _replayMetric === "pressure" ? "infectious pressure" : "hub stock";
   let greenHint = geoForecast
-    ? ` Green circles: hub stock (C) ensemble — simulation day ${lastDayIdx}${greenDate}` +
+    ? ` Green circles: ${greenMetric} — simulation day ${lastDayIdx}${greenDate}` +
       (nTot ? ` (${nTot}-day horizon)` : "") +
       "; radius √-scaled vs busiest hub that day."
     : " Green circles appear once forecast caches geo buckets.";
@@ -548,15 +562,3 @@ function _updateMapLegend(data, geoForecast, replayGeo) {
     `<strong>|</strong> Recorded vs forecast overlays: use toggles above.`;
 }
 
-function _curvedLine(from, to) {
-  const points = [];
-  const steps = 20;
-  for (let i = 0; i <= steps; i++) {
-    const t = i / steps;
-    const lat = from[0] + (to[0] - from[0]) * t;
-    const lng = from[1] + (to[1] - from[1]) * t;
-    const arc = Math.sin(Math.PI * t) * Math.abs(to[0] - from[0]) * 0.3;
-    points.push([lat + arc, lng]);
-  }
-  return points;
-}

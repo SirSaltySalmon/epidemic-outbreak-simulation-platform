@@ -57,7 +57,7 @@ This document is **not** statistical inference inside MCMC; it is **scenario for
 | ----------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
 | `**CaseRecord`**                                      | Symptom onset, optional hospitalisation/death dates, `location_airport_code`, cohort fields for non-individual rows                           |
 | `**airports.dat` / `routes.dat**` (OpenFlights-style) | Valid IATA set, **route multiplicity** for weighted sampling (more duplicate (origin, dest) rows → higher weight)                             |
-| **Inference / scenario parameters**                   | e.g. `p_transmit`, scales, CFR priors—wired like the retired **ensemble** parameter draws (exact mapping in implementation plan)              |
+| **Inference / scenario parameters**                   | e.g. `p_transmit` (per casual hub contact), CFR, incubation, `h2h_multiplier`—from **hub-surrogate v2** posterior summaries and scenario overrides (see Bayesian inference implementation plan) |
 | **Scenario catalog**                                  | `[scenarios.json](../../../app/eosp/data/scenarios.json)` pattern: overrides for contact means, NB dispersion, horizon, index exclusion, etc. |
 
 
@@ -199,7 +199,7 @@ Exact field names and whether final day echoes static heatmap duplicate are **im
 | `**docs/ABM_RETIREMENT.md**`        | Should link this spec once the engine ships (see §1).                                                                                    |
 
 
-Inference may supply `**InferenceConfig.network_summary**` without building a graph, per retirement §6.2—the simulator independently uses `**routes.dat` / `airports.dat**` for mobility.
+Hub-surrogate v2 inference does not use `**InferenceConfig.network_summary**` for the likelihood (the field remains for legacy compatibility); the forward simulator independently uses `**routes.dat` / `airports.dat**` for mobility.
 
 ---
 
@@ -239,7 +239,7 @@ The following conversational decisions are embodied above:
 | Tallies            | **Observed + synthetic** aligned to timeline                                                                      |
 | Heatmap default    | **C** (median cumulative infected)                                                                                |
 | Replay             | Sparse daily **A_median** and **C_median** with toggles                                                           |
-| Inference          | Runs **outside** forward kernel; summaries feed parameters                                                        |
+| Inference          | Runs **outside** forward kernel; **hub-surrogate v2** NUTS summaries feed trajectory draws (not a separate graph growth model) |
 
 
 **Sign-off:** Product owner confirms this spec captures intent before invoking the `**writing-plans`** skill for the implementation breakdown.

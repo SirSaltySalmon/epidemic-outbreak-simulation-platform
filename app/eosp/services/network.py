@@ -101,9 +101,9 @@ class ContactNetwork:
     def degree_summary(self) -> dict[str, float]:
         """Aggregate weighted degree per agent averaged across the simulation horizon.
 
-        Used by the Bayesian next-generation operator (FR-2.1) to translate
-        ``(p_transmit, contacts_daily, h2h_multiplier)`` into expected daily
-        onsets without running the stochastic ABM inside MCMC.
+        **Legacy only:** retained for old tests and compatibility. Active
+        ``hub_surrogate_v2`` inference conditions on hub-timeline calendar
+        features instead of graph degree (see :mod:`eosp.services.inference`).
         """
 
         np, _, _ = _scipy_bundle()

@@ -108,13 +108,10 @@ If no itinerary patches: **sparse adjacency** per day (`adjacency_for_day`); **c
 **Inference** (`run_inference`):
 
 - Builds **`daily_onsets_from_cases`** (person-equivalents per calendar day).
-- Calls **`network.degree_summary()`** → uses **`mean_weighted_degree`** inside the NumPyro model:
+- **Hub-surrogate v2:** fits a **Negative-Binomial** likelihood against a **deterministic mean-field** construction that shares calendar anchoring, contact means, load scaling, and onset-burst semantics with `eosp.services.hub_timeline` (not the retired ABM graph).
+- **`p_transmit`** is interpreted as **per casual hub contact** with a low Beta prior; **`contacts_daily`** is **not** inferred.
 
-  `effective_contact_rate = contacts_daily + 0.4 * mean_weighted_degree`
-
-- Likelihood: **Negative-Binomial** on expected incidence curve derived from a **closed-form growth** construction (`r_eff`, `generation_interval`), **not** by running the ABM inside MCMC.
-
-So **posteriors** were **consistent with** a simplified renewal/growth embedding of the graph, while **forecasts** were **forward simulation** of the full ABM with uncertainty from those parameters.
+Legacy note: older docs described **`mean_weighted_degree`** inside a growth-style NUTS model; that path is retired alongside the ABM.
 
 ---
 
@@ -154,14 +151,12 @@ cases → run_inference(network) → InferenceResult (+ posterior arrays)
 
 ### 6.2 Phase 2 — decouple inference from `ContactNetwork` (implemented)
 
-**`mean_weighted_degree`** can be supplied without building a graph:
+As of the hub-surrogate v2 inference plan, **`ContactNetwork.degree_summary()`** is legacy-only. The active Bayesian model conditions on hub-timeline calendar features and low casual-contact transmissibility priors.
 
-- Set **`InferenceConfig.network_summary`** to a dict containing **`mean_weighted_degree`** (other keys from `degree_summary()` are optional; only `mean_weighted_degree` is read by NUTS today).
-- **`run_inference`** accepts **`network=None`** when that config field is set; otherwise it requires a **`ContactNetwork`** as before.
-- **`JobManager._run_full_refresh`** skips **`build_default_network`** when the job’s inference config already carries **`network_summary`**.
-- For deployments, **`EOSP_INFERENCE_MEAN_WEIGHTED_DEGREE`** (optional env var) is wired in **`inference_config_from_env()`**: when set, bootstrap/job managers use that scalar as the sole bridge into the likelihood.
+- **`InferenceConfig.network_summary`** and **`EOSP_INFERENCE_MEAN_WEIGHTED_DEGREE`** are still parsed for **compatibility** so old deployments do not crash; **v2 ignores** that summary and records **`network_summary_ignored`** in **`InferenceResult.diagnostics`** when it was set.
+- **`run_inference`** does **not** require a **`ContactNetwork`** for v2; callers may still pass one for API compatibility.
 
-To fully remove OpenFlights/world_builder from a deployment, set the env var (or inject **`network_summary`** into **`InferenceConfig`**) and ensure no other code path still imports the world builder for your workload.
+OpenFlights **`routes.dat` / `airports.dat`** remain required for **hub timeline forward simulation** (mobility), not for NUTS likelihood features.
 
 ---
 
@@ -171,9 +166,9 @@ To fully remove OpenFlights/world_builder from a deployment, set the env var (or
 CaseRecord[] ──► run_inference ──► InferenceResult
        │              │
        │              ▼
-       │     degree_summary(network) ──► mean_weighted_degree ──► NUTS likelihood
+       │     hub surrogate features (calendar / loads / bursts) ──► NUTS likelihood
        │
-       └──► build_default_network ──► ContactNetwork (itinerary patches)
+       └──► build_default_network ──► ContactNetwork (itinerary patches) [legacy / tests]
                       │
                       ▼
             [REMOVED] seed_state_from_case_records

@@ -78,9 +78,9 @@
           <label class="map-replay-slider-label" for="map-replay-day">Replay date</label>
           <input type="range" id="map-replay-day" min="0" max="0" value="0" aria-valuetext="" />
           <span class="map-replay-date-label" id="map-replay-date-label" aria-live="polite"></span>
-          <div class="map-replay-metric" role="group" aria-label="Replay heat metric">
-            <label><input type="radio" name="map-replay-metric" id="map-replay-metric-c" value="C" checked /> Stock (C)</label>
-            <label><input type="radio" name="map-replay-metric" id="map-replay-metric-a" value="A" /> Pressure (A)</label>
+          <div class="map-replay-metric" role="group" aria-label="Forecast map metric">
+            <label><input type="radio" name="map-replay-metric" id="map-replay-metric-stock" value="stock" checked /> Stock</label>
+            <label><input type="radio" name="map-replay-metric" id="map-replay-metric-pressure" value="pressure" /> Pressure</label>
           </div>
         </div>
         <div class="map-layer-toggles" role="group" aria-label="Map overlays">
@@ -99,11 +99,33 @@
     <!-- Forecast chart + scenario sidebar -->
     <div class="workspace">
       <div class="chart-panel">
-        <div class="panel-heading">
+        <div class="panel-heading panel-heading--forecast">
           <h2 id="chart-heading-horizon">Baseline Forecast · Cumulative cases · simulation horizon</h2>
-          <span class="freshness" id="chart-freshness"></span>
+          <div class="panel-heading__actions">
+            <button
+              type="button"
+              id="btn-load-full-timeline"
+              class="btn-load-full-timeline"
+              hidden
+            >
+              Load full timeline
+            </button>
+            <span class="freshness" id="chart-freshness"></span>
+          </div>
         </div>
-        <div id="forecast-chart"></div>
+        <div class="forecast-chart-wrap">
+          <div
+            id="forecast-timeline-loading"
+            class="forecast-timeline-loading"
+            hidden
+            aria-live="polite"
+            aria-busy="false"
+          >
+            <span class="forecast-timeline-loading__spinner" aria-hidden="true"></span>
+            <span class="forecast-timeline-loading__text">Loading full timeline…</span>
+          </div>
+          <div id="forecast-chart"></div>
+        </div>
         <p class="chart-explanation" id="chart-explanation" aria-live="polite"></p>
       </div>
       <aside class="scenario-sidebar" id="scenario-sidebar" aria-label="Scenario comparison">
@@ -186,40 +208,40 @@
             <g fill="#b95b35">
               <circle cx="248" cy="48" r="3"/><circle cx="254" cy="52" r="3"/><circle cx="266" cy="50" r="3"/><circle cx="260" cy="58" r="3"/><circle cx="252" cy="62" r="3"/>
             </g>
-            <text x="160" y="102" text-anchor="middle" fill="#6b9990" font-size="10" font-family="system-ui,sans-serif">Starts at four hubs where the first patients travelled through</text>
+            <text x="160" y="102" text-anchor="middle" fill="#6b9990" font-size="10" font-family="system-ui,sans-serif">Observed cases appear on the date of symptom onset</text>
           </svg>
         </figure>
         <figure class="model-diagram-card">
           <figcaption class="model-diagram-caption">Health states (simplified)</figcaption>
           <svg class="model-svg" viewBox="0 0 320 88" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
-            <rect x="10" y="32" width="52" height="28" rx="4" fill="#162e29" stroke="#1e3530"/>
-            <text x="36" y="50" text-anchor="middle" fill="#e0f0ed" font-size="11" font-family="system-ui,sans-serif">Susceptible</text>
+            <rect x="10" y="32" width="52" height="28" rx="4" fill="#162e29" stroke="#1e3530"/>M
+            <text x="36" y="50" text-anchor="middle" fill="#e0f0ed" font-size="11" font-family="system-ui,sans-serif">Exposed</text>
             <text x="74" y="48" fill="#6b9990" font-size="14" font-family="system-ui,sans-serif">→</text>
             <rect x="88" y="32" width="52" height="28" rx="4" fill="#162e29" stroke="#d89c22"/>
-            <text x="114" y="50" text-anchor="middle" fill="#e0f0ed" font-size="11" font-family="system-ui,sans-serif">Exposed</text>
+            <text x="114" y="50" text-anchor="middle" fill="#e0f0ed" font-size="11" font-family="system-ui,sans-serif">Infectious</text>
             <text x="152" y="48" fill="#6b9990" font-size="14" font-family="system-ui,sans-serif">→</text>
             <rect x="166" y="32" width="52" height="28" rx="4" fill="#162e29" stroke="#b95b35"/>
-            <text x="192" y="50" text-anchor="middle" fill="#e0f0ed" font-size="11" font-family="system-ui,sans-serif">Infectious</text>
+            <text x="192" y="50" text-anchor="middle" fill="#e0f0ed" font-size="11" font-family="system-ui,sans-serif">Hospitalised</text>
             <text x="230" y="48" fill="#6b9990" font-size="14" font-family="system-ui,sans-serif">→</text>
             <rect x="244" y="26" width="62" height="20" rx="4" fill="#162e29" stroke="#2f7d4f"/>
             <text x="275" y="40" text-anchor="middle" fill="#9ccac6" font-size="10" font-family="system-ui,sans-serif">Recovered</text>
             <rect x="244" y="50" width="62" height="20" rx="4" fill="#162e29" stroke="#5a1e1e"/>
             <text x="275" y="64" text-anchor="middle" fill="#c7928c" font-size="10" font-family="system-ui,sans-serif">Deceased</text>
-            <text x="160" y="82" text-anchor="middle" fill="#6b9990" font-size="9" font-family="system-ui,sans-serif">The real model adds finer stages (e.g. hospital); this is the idea in plain language.</text>
+            <text x="160" y="82" text-anchor="middle" fill="#6b9990" font-size="9" font-family="system-ui,sans-serif">Spawns in exposed state if successfully transmitted, then progresses.</text>
           </svg>
         </figure>
       </div>
 
       <ul class="model-explain-bullets">
-        <li><strong>The map</strong> shows scenario risk from the hub-timeline ensemble: orange heat is median cumulative infected stock (metric C) at hubs; optional replay scrubs calendar days and metric A vs C. It is not a census of everyone at each city.</li>
-        <li><strong>Scenarios</strong> (sidebar) change assumptions—such as cutting some contacts—so you can compare “what if” without pretending any option is certain.</li>
-        <li><strong>Limitations:</strong> schedules come from public flight-route data (connections, not your personal ticket); counts near hubs are placeholders until official numbers are plugged in; the model cannot predict real-world policy or behavior changes it does not know about.</li>
+        <li><strong>The map</strong> shows scenario risk from the hub-timeline ensemble: orange heat and green rings can show either <strong>stock</strong> (people attributed to the hub across compartments) or <strong>pressure</strong> (infectious-weighted presence) when replay is available. It is not a census of everyone at each city.</li>
+        <li><strong>Scenarios</strong> (sidebar) change assumptions—such as restricting travel, or implementing social distancing lowering transmission rates, to compare what may happen.</li>
+        <li><strong>Limitations:</strong> mean contacts per day is fixed; lack of official to infer from; the model cannot predict real-world policy or behavior changes</li>
       </ul>
 
       <div class="model-technical" id="model-technical-details">
         <h3 class="model-technical-heading">Technical details</h3>
         <div class="model-technical-body">
-          <p><strong>Cohort and line list.</strong> The hub-timeline engine ingests individual <code>CaseRecord</code> rows (and cohort rows that spawn synthetic agents at onset) with valid IATA hubs from OpenFlights-derived route data. An optional index case can be excluded from anchoring and forcing (see <code>EOSP_HUB_INDEX_CASE_ID</code>).</p>
+          <p><strong>Cohort and line list.</strong> The hub-timeline engine ingests individual <code>CaseRecord</code> rows (and cohort rows that spawn synthetic agents at onset) with valid IATA hubs from OpenFlights-derived route data. First recorded case is skip, as patient stayed on cruise ship. (see <code>EOSP_HUB_INDEX_CASE_ID</code>).</p>
           <p><strong>Mobility.</strong> Synthetic agents move between hubs using frequency-weighted routes from <code>routes.dat</code>; home-airport sampling follows the design spec (mix of current hub vs route-weighted destinations). Observed individuals follow fixed pinned hub rules from symptom onset through hospitalisation where recorded.</p>
           <p><strong>Dynamics.</strong> Forward simulation uses daily negative-binomial contact counts, load-dependent transmission, scenario-tunable compartment progression (E→P→I→H/R/D for synthetics; observed rows follow recorded timeline per spec). This replaces the retired vectorised ABM (see <code>docs/ABM_RETIREMENT.md</code>).</p>
           <p><strong>Inference vs. simulation.</strong> Bayesian posteriors supply summary parameters (e.g. transmissibility, contact intensity, incubation, severity). The hub-timeline kernel draws per-trajectory values and runs independently of the MCMC chain.</p>

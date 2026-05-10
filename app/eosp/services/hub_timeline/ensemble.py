@@ -40,24 +40,6 @@ def _scenario_config(
     spec: ScenarioSpec, base: HubTimelineSimulatorConfig, inference: InferenceResult
 ) -> HubTimelineSimulatorConfig:
     cfg = base.merged_with_scenario_hub_timeline(spec.hub_timeline)
-    infer_cd = float(
-        inference.parameters["contacts_daily"].mean
-        if "contacts_daily" in inference.parameters
-        else base.baseline_contacts_daily
-    )
-    base_floats = {k: float(v.mean) for k, v in inference.parameters.items()}
-    base_floats.setdefault("contacts_daily", infer_cd)
-    base_floats.setdefault("cfr", float(cfg.default_cfr))
-    base_floats.setdefault("p_transmit", 0.08)
-    adj = spec.apply_to_parameters(base_floats)
-    scenario_cd = float(adj.get("contacts_daily", infer_cd))
-    scale = scenario_cd / max(cfg.baseline_contacts_daily, 1e-9)
-    cfg = replace(
-        cfg,
-        mu_travel=cfg.mu_travel * scale,
-        mu_stay=cfg.mu_stay * scale,
-        mu_onset_burst=cfg.mu_onset_burst * scale,
-    )
     mw = spec.network_modifications.get("modify_weights") or {}
     itin = mw.get("itinerary_patch")
     if itin is not None:
@@ -79,12 +61,11 @@ def _inference_param_draws(
         base_map[k] = float(v.mean)
     if "cfr" not in base_map:
         base_map["cfr"] = float(cfg.default_cfr)
-    if "contacts_daily" not in base_map:
-        base_map["contacts_daily"] = float(cfg.baseline_contacts_daily)
 
     adj = spec.apply_to_parameters(base_map)
     p_mean = float(adj.get("p_transmit", base_map.get("p_transmit", 0.08)))
-    p_std = float(inference.parameters["p_transmit"].std) if "p_transmit" in inference.parameters else 0.02
+    p_std = float(inference.parameters["p_transmit"].std) if "p_transmit" in inference.parameters else 0.005
+    p_std = min(max(p_std, 1e-9), 0.015)
 
     cfr_mean = float(adj.get("cfr", base_map["cfr"]))
     cfr_std = float(inference.parameters["cfr"].std) if "cfr" in inference.parameters else 0.01
@@ -134,6 +115,14 @@ def run_hub_timeline_forecast(
     )
     if not eligible:
         raise ValueError("No eligible hub cases after IATA filter — cannot run hub timeline forecast")
+
+    baseline_eligible = eligible_hub_cases(
+        list(cases),
+        allowed_iatas=allowed,
+        index_case_id=None,
+        skip_earliest_symptom_case=False,
+    )
+    skipped_for_anchor = len(baseline_eligible) - len(eligible)
 
     anchor, sim_days = compute_simulation_calendar(eligible, horizon_days=cfg.horizon_days)
 
@@ -188,6 +177,10 @@ def run_hub_timeline_forecast(
     n_days = len(sim_days)
     stack_cases = np.stack([t.global_cases for t in trajs], axis=0)
     stack_deaths = np.stack([t.global_deaths for t in trajs], axis=0)
+    if skipped_for_anchor:
+        adj = float(skipped_for_anchor)
+        stack_cases = stack_cases + adj
+        stack_deaths = stack_deaths + adj
 
     def pct_block(arr: np.ndarray) -> dict[str, float]:
         s = np.asarray(arr, dtype=float)
@@ -231,7 +224,9 @@ def run_hub_timeline_forecast(
         "n_simulations": n_simulations,
         "inference_version": inference.version,
         "model_version": inference.version,
+        "horizon_days": cfg.horizon_days,
         "hub_skip_earliest_symptom_case": skip_earliest_symptom_case,
+        "hub_skipped_cases_added_to_totals": int(skipped_for_anchor),
         "rng_seed": rng_seed,
         "geo_forecast": geo,
         "replay_geo": replay,

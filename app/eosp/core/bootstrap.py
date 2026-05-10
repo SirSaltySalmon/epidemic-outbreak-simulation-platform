@@ -61,6 +61,7 @@ def ensemble_config_from_env() -> EnsembleConfig:
 
 
 def inference_config_from_env() -> InferenceConfig:
+    # Still parse legacy degree env for compatibility; hub_surrogate_v2 ignores it.
     raw_deg = os.environ.get("EOSP_INFERENCE_MEAN_WEIGHTED_DEGREE", "").strip()
     network_summary = None
     if raw_deg:

@@ -108,7 +108,7 @@ def _stub_forecast_response(scenario: str, *, final_cases: float, n_sim: int = 1
             "replay_geo": _replay_geo_for_tests(start),
             "parameter_values": {
                 "p_transmit_mean": inf.parameters["p_transmit"].mean,
-                "contacts_daily_mean": inf.parameters["contacts_daily"].mean,
+                "cfr_mean": inf.parameters["cfr"].mean,
                 "incubation_mean": inf.parameters["incubation"].mean,
             },
         },
@@ -396,6 +396,28 @@ def test_dashboard_bootstrap_baseline_has_replay_geo_metadata():
     assert "airports" in rg["days"][0]
 
 
+def test_dashboard_bootstrap_timeline_compact_trims_series():
+    """Default bootstrap carries only the final simulation day; full restores the timeline."""
+
+    _seed_cached_forecasts("baseline")
+    compact = client.get("/api/v1/dashboard/bootstrap").json()
+    full = client.get("/api/v1/dashboard/bootstrap?timeline_detail=full").json()
+    assert compact.get("forecast_timeline_compact") is True
+    assert full.get("forecast_timeline_compact") is False
+    cfb = compact["forecast_baseline"]
+    ffb = full["forecast_baseline"]
+    assert len(cfb["forecast"]) == 1
+    assert len(ffb["forecast"]) == 14
+    cgeo = (cfb["metadata"].get("geo_forecast") or {}).get("by_day") or []
+    fgeo = (ffb["metadata"].get("geo_forecast") or {}).get("by_day") or []
+    assert len(cgeo) == 1
+    assert len(fgeo) == 14
+    crg = (cfb["metadata"].get("replay_geo") or {}).get("days") or []
+    frg = (ffb["metadata"].get("replay_geo") or {}).get("days") or []
+    assert len(crg) == 1
+    assert len(frg) == 2
+
+
 def test_validation_accepts_countries_from_reference_geo():
     """Countries in airport_coords (e.g. DE) pass geographic_plausibility."""
 
@@ -475,7 +497,7 @@ def test_forecast_metadata_carries_inferred_parameters():
     payload = response.json()
     parameter_values = payload["metadata"]["parameter_values"]
     assert parameter_values["p_transmit_mean"] > 0
-    assert parameter_values["contacts_daily_mean"] > 0
+    assert parameter_values["cfr_mean"] > 0
     assert parameter_values["incubation_mean"] > 0
 
 

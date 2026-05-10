@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import date
+from collections.abc import Callable
 from typing import TYPE_CHECKING
 
 from eosp.core.models import ForecastResponse, ForecastRunItem, InferenceResult, ScenarioComparison, ScenarioComparisonItem
@@ -10,7 +11,7 @@ if TYPE_CHECKING:
 
 _FORECAST_CACHE: dict[tuple[str, str, int, str, int], ForecastResponse] = {}
 
-FULL_SIMULATIONS = 10000
+FULL_SIMULATIONS = 100
 
 
 def build_forecast(
@@ -20,7 +21,9 @@ def build_forecast(
     *,
     cases: list[CaseRecord] | None = None,
     index_case_id: str | None = None,
+    skip_earliest_symptom_case: bool = False,
     rng_seed: int | None = None,
+    simulation_progress: Callable[..., None] | None = None,
 ) -> ForecastResponse:
     from eosp.core.compute_config import EnsembleConfig
     from eosp.services.hub_timeline.ensemble import run_hub_timeline_forecast
@@ -30,8 +33,15 @@ def build_forecast(
 
     ec = EnsembleConfig()
     seed = int(rng_seed if rng_seed is not None else ec.rng_seed)
-    cache_key = (scenario, inference.version, int(n_simulations), index_case_id or "", seed)
-    if cache_key in _FORECAST_CACHE:
+    cache_key = (
+        scenario,
+        inference.version,
+        int(n_simulations),
+        index_case_id or "",
+        int(bool(skip_earliest_symptom_case)),
+        seed,
+    )
+    if simulation_progress is None and cache_key in _FORECAST_CACHE:
         return _FORECAST_CACHE[cache_key]
 
     response = run_hub_timeline_forecast(
@@ -41,8 +51,11 @@ def build_forecast(
         n_simulations=int(n_simulations),
         rng_seed=seed,
         index_case_id=index_case_id,
+        skip_earliest_symptom_case=skip_earliest_symptom_case,
+        simulation_progress=simulation_progress,
     )
-    _FORECAST_CACHE[cache_key] = response
+    if simulation_progress is None:
+        _FORECAST_CACHE[cache_key] = response
     return response
 
 
@@ -53,6 +66,7 @@ def run_forecast_engine(
     *,
     cases: list[CaseRecord] | None = None,
     index_case_id: str | None = None,
+    skip_earliest_symptom_case: bool = False,
     rng_seed: int | None = None,
 ) -> tuple[ForecastRunItem, ForecastResponse]:
     from eosp.services.hub_timeline.ensemble import run_forecast_simulation
@@ -66,6 +80,7 @@ def run_forecast_engine(
         cases=cases,
         n_simulations=n_simulations,
         index_case_id=index_case_id,
+        skip_earliest_symptom_case=skip_earliest_symptom_case,
         rng_seed=rng_seed,
     )
 

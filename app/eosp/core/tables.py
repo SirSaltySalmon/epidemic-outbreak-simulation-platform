@@ -95,7 +95,7 @@ class ForecastResultRow(Base):
     scenario: Mapped[str] = mapped_column(String(100), index=True)
     generated_timestamp: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     forecast_json: Mapped[dict[str, Any]] = mapped_column(JSON)
-    n_simulations: Mapped[int] = mapped_column(Integer, default=10000)
+    n_simulations: Mapped[int] = mapped_column(Integer, default=100)
     execution_time_seconds: Mapped[float] = mapped_column(Float)
     s3_archive_path: Mapped[str | None] = mapped_column(String(500))
 

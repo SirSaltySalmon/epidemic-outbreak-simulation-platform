@@ -189,7 +189,7 @@ def reference_countries(http_response: Response) -> dict[str, list[dict[str, str
 def reference_airports(
     http_response: Response,
     country: str | None = Query(default=None),
-) -> dict[str, list[dict[str, str]]]:
+) -> dict[str, list[dict[str, Any]]]:
     http_response.headers["Cache-Control"] = _CACHE_REFERENCE_BUNDLE
     return {"airports": airports_for_api(country)}
 
@@ -509,7 +509,9 @@ def run_forecasts(
     items = []
     scenarios_s = list(payload.scenarios)
     n_sims = int(payload.n_simulations)
-    index_id = get_settings().hub_index_case_id
+    st = get_settings()
+    index_id = st.hub_index_case_id
+    skip_early = bool(st.hub_skip_earliest_symptom_case) and not (index_id or "").strip()
     case_rows = list(repo.list_cases())
     for scenario in scenarios_s:
         try:
@@ -519,6 +521,7 @@ def run_forecasts(
                 n_simulations=n_sims,
                 cases=case_rows,
                 index_case_id=index_id,
+                skip_earliest_symptom_case=skip_early,
             )
         except (ImportError, ModuleNotFoundError) as exc:
             raise HTTPException(

@@ -35,6 +35,9 @@ class Settings(BaseSettings):
 
     #: Optional UUID string: excluded from hub timeline anchor + line-list forcing (narrative index case).
     hub_index_case_id: str | None = None
+    #: If true (and ``hub_index_case_id`` is unset), drop exactly one hub-eligible case: earliest
+    #: ``symptom_onset_date`` (tie-break: smallest ``case_id``). Anchors day 0 on the next onset.
+    hub_skip_earliest_symptom_case: bool = False
 
     #: When set, hub cohort agent count in :func:`build_world_contact_network` uses this
     #: instead of summing baseline flight ``n_passengers`` (overrides spawn ship block).

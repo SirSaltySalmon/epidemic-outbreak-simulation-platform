@@ -5,8 +5,8 @@
       "name": "baseline",
       "public_label": "Baseline",
       "similar_to": "No added intervention; reference mobility.",
-      "description": "No scenario overlays: inferred transmission parameters and default hub itinerary mixing (Track B).",
-      "technical_explanation": "parameter_overrides is empty. network_modifications is empty so apply_modifications leaves ContactNetwork unchanged: itinerary_patch_weight and itinerary_flight_weight stay 1.0 from build_world_contact_network. Ensemble draws p_transmit, contacts_daily, incubation, h2h_multiplier, and cfr from the inferred posterior summaries (or raw posterior samples when provided), then runs the ABM with patch co-location exposure (contacts_daily enters as mix = contacts_daily / 24 on patch pressure).",
+      "description": "Hub-timeline forward simulation with inferred transmission and disease parameters and default contact / load / mobility settings from the scenario ``hub_timeline`` block.",
+      "technical_explanation": "The hub-timeline kernel (``eosp.services.hub_timeline``) runs a calendar-anchored Monte Carlo: negative-binomial contact draws at hubs (μ_travel / μ_stay / onset burst from ``hub_timeline.contacts``), load-dependent transmission via ``load.alpha`` on effective infectious weight L, and Markov hub mobility (``mobility``). Posterior means for p_transmit, h2h_multiplier, cfr, incubation feed per-trajectory draws; ``contacts_daily`` scales the contact means relative to the config baseline. ``parameter_overrides`` and ``network_modifications`` are empty — no extra scaling.",
       "network_modifications": {},
       "parameter_overrides": {},
       "hub_timeline": {
@@ -20,8 +20,8 @@
       "name": "terminal_distancing",
       "public_label": "Terminal distancing",
       "similar_to": "Social distancing in airports and crowded travel settings.",
-      "description": "Weaker effective mixing when people share the same airport patch (same movement paths as baseline).",
-      "technical_explanation": "network_modifications.modify_weights.itinerary_patch scales ContactNetwork.itinerary_patch_weight in apply_modifications (multiplier below 1). The ABM uses pw = itinerary_patch_weight when agents are grouped by patch (default world has itinerary_contact_patch; flight groups are zero). p_transmit and contacts_daily are unchanged from inference. Same Markov itinerary as baseline.",
+      "description": "Reduces hub crowding pressure by tightening the load response (same narrative as weaker terminal mixing).",
+      "technical_explanation": "``network_modifications.modify_weights.itinerary_patch`` (0.62) multiplies ``alpha_load`` in ``_scenario_config`` (ensemble), weakening how aggregate infectious weight L raises per-contact infection risk — analogous to softer mixing without changing inferred p_transmit or contact Poisson-means unless ``parameter_overrides`` add them. Mobility and dispersion keys match baseline unless overridden.",
       "network_modifications": {
         "modify_weights": { "itinerary_patch": 0.62 }
       },
@@ -37,8 +37,8 @@
       "name": "reduced_travel_connectivity",
       "public_label": "Restricted travel",
       "similar_to": "Lighter travel and fewer effective connections.",
-      "description": "Lower effective daily contact intensity while keeping the same hub cohort and itinerary matrix.",
-      "technical_explanation": "parameter_overrides.contacts_daily sets a lower mean for the Monte Carlo draws (ensemble._draw_parameter_samples uses scenario_params; posterior resampling gets mean alignment via _align_drawn_means). In abm.simulate_trajectory, contacts_daily scales exposure through mix = contacts_daily / 24 applied to patch pressure. itinerary_patch_weight unchanged unless you add itinerary_patch in JSON.",
+      "description": "Lower inferred mean ``contacts_daily`` before scenario scaling shrinks effective μ_travel / μ_stay / onset-burst contacts for the hub kernel.",
+      "technical_explanation": "``parameter_overrides.contacts_daily`` lowers the posterior mean feeding ``contacts_daily`` in ``_scenario_config``; ensemble rescales hub_timeline μ values by scenario_cd / baseline_contacts_daily. Network graph for hub mobility still comes from OpenFlights routes; no itinerary_patch multiplier unless added in JSON.",
       "network_modifications": {},
       "parameter_overrides": {
         "contacts_daily": 1.75
@@ -54,8 +54,8 @@
       "name": "enhanced_case_isolation",
       "public_label": "More effective quarantining",
       "similar_to": "Stricter isolation when cases are identified.",
-      "description": "Lower per-contact transmission given the same mixing (faster finding and separation of infectious individuals).",
-      "technical_explanation": "parameter_overrides.p_transmit_scale multiplies baseline p_transmit in ScenarioSpec.apply_to_parameters before sampling. Ensemble uses the adjusted mean for truncated normals or aligns posterior draws to scenario_params.p_transmit. Network weights unchanged.",
+      "description": "Scales inferred transmissibility downward for the hub contact draw infection step.",
+      "technical_explanation": "``parameter_overrides.p_transmit_scale`` (0.45) adjusts the mean ``p_transmit`` via ``ScenarioSpec.apply_to_parameters`` before truncated-normal draws inside each trajectory — fewer successful transmissions given the same L and contacts. Hub graph, NB dispersion ``r_dispersion``, and mobility block default to baseline.",
       "network_modifications": {},
       "parameter_overrides": {
         "p_transmit_scale": 0.45

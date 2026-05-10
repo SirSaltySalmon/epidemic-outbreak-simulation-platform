@@ -14,9 +14,9 @@ const SCENARIOS = [
   { id: "enhanced_case_isolation", label: "More effective quarantining" },
 ];
 const FIDELITY = [
-  { value: 100,   label: "100 (fast preview)" },
-  { value: 1000,  label: "1,000" },
-  { value: 10000, label: "10,000 (full)" },
+  { value: 1, label: "1 (preview)" },
+  { value: 10, label: "10" },
+  { value: 100, label: "100" },
 ];
 
 let _selectedScenarios = new Set(["baseline"]);
@@ -98,10 +98,10 @@ function _formatEtaSeconds(sec) {
   return `~${Math.round(sec / 3600)}h`;
 }
 
-/** Remaining time for Monte Carlo from server elapsed_s + progress. */
+/** Remaining ETA from hub-timeline Monte Carlo (timeline step units or legacy trajectory counts). */
 function _simEtaLine(data) {
-  const done = data.trajectories ?? 0;
-  const total = data.total ?? 0;
+  const done = Number(data.trajectories) || 0;
+  const total = Number(data.total) || 0;
   const elapsed = data.elapsed_s;
   if (done > 0 && total > 0 && done < total && typeof elapsed === "number" && elapsed > 0.05) {
     const rate = done / elapsed;
@@ -632,7 +632,7 @@ function _renderRunning() {
   const stages = [
     { n: 1, title: "① Cases & Network",        state: "pending" },
     { n: 2, title: "② Bayesian Inference",      state: "pending" },
-    { n: 3, title: "③ Monte Carlo Simulation",  state: "pending" },
+    { n: 3, title: "③ Hub timeline simulation",  state: "pending" },
     { n: 4, title: "④ Results",                 state: "pending" },
   ];
 
@@ -760,15 +760,23 @@ function _stageDetailHtml(n, state, data) {
     `;
   }
   if (n === 3) {
+    const total = data.total ?? 1;
     const done = data.trajectories ?? 0;
-    const total = data.total ?? 10000;
-    const pct = Math.round((done / total) * 100);
+    const pct = total > 0 ? Math.round((done / total) * 100) : 0;
+    const mcTotal = data.trajectories_total_mc ?? data.n_simulations ?? "—";
+    const dayLine =
+      data.calendar_date != null
+        ? `<div class="replay-line" style="color:var(--teal-light);font-size:0.8rem">Calendar: <strong>${String(
+            data.calendar_date,
+          )}</strong> · day ${data.calendar_day_index ?? "—"} / ${data.calendar_days_total ?? "—"} · MC run ${data.trajectory_index ?? "—"} / ${mcTotal}</div>`
+        : "";
     return `
       <div class="stat-row">
-        <div class="stat-box"><div class="stat-lbl">Trajectories</div><div class="stat-val">${done.toLocaleString()}</div><div class="stat-sub">/ ${total.toLocaleString()}</div></div>
+        <div class="stat-box"><div class="stat-lbl">Timeline</div><div class="stat-val">${done.toLocaleString()}</div><div class="stat-sub">/ ${Number(total).toLocaleString()} steps</div></div>
         <div class="stat-box"><div class="stat-lbl">Scenario</div><div class="stat-val" style="font-size:0.9rem">${(data.scenario || "").replace(/_/g, " ")}</div></div>
         <div class="stat-box"><div class="stat-lbl">Progress</div><div class="stat-val">${pct}%</div></div>
       </div>
+      ${dayLine}
       <div class="progress-bar"><div class="progress-fill" style="width:${pct}%"></div></div>
       <div class="progress-eta" style="color:var(--ink-muted);font-size:0.78rem">${
         _simEtaLine(data) || "Estimating time…"
@@ -790,8 +798,8 @@ function _doneSummary(n, data) {
   if (n === 1) return `${data.n_cases ?? "?"} cases · quality ${typeof data.quality_mean === "number" ? data.quality_mean.toFixed(2) : "?"}`;
   if (n === 2) return `Inference complete · R̂ ${data.rhat_max != null ? Number(data.rhat_max).toFixed(3) : "?"} · ${data.divergences ?? "?"} divergences`;
   if (n === 3) {
-    const base = `Simulation complete · ${(data.total || data.trajectories || "10,000").toLocaleString()} trajectories`;
-    return base;
+    const total = Number(data.total) || Number(data.trajectories) || 0;
+    return `Hub timeline complete · ${total.toLocaleString()} simulation-day steps · ${(data.n_simulations ?? "").toLocaleString()} MC runs per scenario`;
   }
   if (n === 4) return "Forecast saved and dashboard updated.";
   return "Done";

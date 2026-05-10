@@ -44,6 +44,27 @@ def _geo_forecast_for_tests() -> dict:
     }
 
 
+def _replay_geo_for_tests(start: date) -> dict:
+    """Minimal `eosp_geo_replay_1` payload for bootstrap / map replay QA."""
+
+    d0 = start.isoformat()
+    d1 = (start + timedelta(days=1)).isoformat()
+    return {
+        "schema_version": "eosp_geo_replay_1",
+        "anchor_date": start.isoformat(),
+        "days": [
+            {"date": d0, "airports": {"JNB": {"A_median": 1.2, "C_median": 10.0}}},
+            {
+                "date": d1,
+                "airports": {
+                    "JNB": {"A_median": 2.5, "C_median": 25.0},
+                    "AMS": {"A_median": 0.8, "C_median": 5.0},
+                },
+            },
+        ],
+    }
+
+
 def _forecast_series(start: date, n_days: int, final_cumulative_median: float, final_deaths_median: float):
     forecast = []
     denom = max(n_days - 1, 1)
@@ -80,7 +101,11 @@ def _stub_forecast_response(scenario: str, *, final_cases: float, n_sim: int = 1
             "n_simulations": n_sim,
             "ensemble_spec_hash": "testhash",
             "freshness_status": "current",
+            "horizon_days": 14,
+            "anchor_date": start.isoformat(),
+            "engine": "hub_timeline_monte_carlo",
             "geo_forecast": _geo_forecast_for_tests(),
+            "replay_geo": _replay_geo_for_tests(start),
             "parameter_values": {
                 "p_transmit_mean": inf.parameters["p_transmit"].mean,
                 "contacts_daily_mean": inf.parameters["contacts_daily"].mean,
@@ -259,6 +284,12 @@ def test_console_access_denied_for_forecast_run():
         app.dependency_overrides[require_clerk_session] = lambda: None
 
 
+def test_forecast_run_request_accepts_single_simulation_preview():
+    from eosp.core.models import ForecastRunRequest
+
+    assert ForecastRunRequest(n_simulations=1).n_simulations == 1
+
+
 def test_console_access_allows_patch_when_metadata_true():
     app.dependency_overrides[require_clerk_session] = lambda: {
         "sub": "u",
@@ -346,6 +377,23 @@ def test_reference_airports_filtered_by_country():
     assert r.status_code == 200
     for a in r.json()["airports"]:
         assert a["country"] == "ES"
+    with_coords = [a for a in r.json()["airports"] if a.get("lat") is not None]
+    assert with_coords
+    assert isinstance(with_coords[0]["lat"], (int, float))
+    assert isinstance(with_coords[0]["lng"], (int, float))
+
+
+def test_dashboard_bootstrap_baseline_has_replay_geo_metadata():
+    _seed_cached_forecasts("baseline")
+    b = client.get("/api/v1/dashboard/bootstrap").json()
+    fb = b["forecast_baseline"]
+    assert fb is not None
+    meta = fb["metadata"]
+    assert meta.get("horizon_days") == 14
+    rg = meta.get("replay_geo") or {}
+    assert rg.get("schema_version") == "eosp_geo_replay_1"
+    assert len(rg.get("days") or []) >= 1
+    assert "airports" in rg["days"][0]
 
 
 def test_validation_accepts_countries_from_reference_geo():

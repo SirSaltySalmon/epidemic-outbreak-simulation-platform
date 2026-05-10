@@ -13,7 +13,7 @@ from pathlib import Path
 
 @dataclass
 class EnsembleConfig:
-    n_simulations: int = 10000
+    n_simulations: int = 100
     n_days: int = 14
     start_date: date = date(2026, 5, 7)
     rng_seed: int = 20260507

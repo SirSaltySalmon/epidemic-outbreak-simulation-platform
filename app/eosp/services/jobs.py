@@ -36,7 +36,7 @@ JOB_REFIT = "refit"
 JOB_ENSEMBLE = "ensemble"
 JOB_FULL_REFRESH = "full_refresh"
 
-_PROGRESS_EVENT_BUFFER_SIZE = 200  # bounded ring buffer; SSE drains ~every 500ms
+_PROGRESS_EVENT_BUFFER_SIZE = 3500  # hub-timeline SSE: per-day × trajectory events per scenario
 
 
 @dataclass
@@ -218,9 +218,42 @@ class JobManager:
         if not cases:
             raise RuntimeError("No case records in the database.")
         inference = self._repository.latest_inference()
-        idx = get_settings().hub_index_case_id
+        st = get_settings()
+        idx = st.hub_index_case_id
+        skip_early = bool(st.hub_skip_earliest_symptom_case) and not (idx or "").strip()
         n_sims = int(record.detail.get("n_simulations") or self._ensemble_config.n_simulations)
         from eosp.services.forecast import build_forecast
+        from eosp.services.hub_timeline.config import default_hub_timeline_config
+
+        horizon_days = int(default_hub_timeline_config().horizon_days)
+        sim_t0 = time.monotonic()
+        timeline_total = n_sims * horizon_days
+
+        def _progress_sink(**kw: Any) -> None:
+            elapsed = time.monotonic() - sim_t0
+            cdtot = int(kw.get("calendar_days_total") or horizon_days)
+            di = int(kw.get("calendar_day_index") or 0)
+            trj = int(kw.get("trajectory_index") or 0)
+            td = min((trj - 1) * cdtot + di, timeline_total)
+            record.push_event(
+                {
+                    "stage": "simulation",
+                    "status": "active",
+                    "scenario": scenario_name,
+                    "scenario_index": 0,
+                    "scenarios_done": 0,
+                    "scenarios_total": 1,
+                    "calendar_day_index": di,
+                    "calendar_date": kw.get("calendar_date"),
+                    "calendar_days_total": cdtot,
+                    "trajectory_index": trj,
+                    "trajectories_total_mc": n_sims,
+                    "trajectories": td,
+                    "total": timeline_total,
+                    "elapsed_s": elapsed,
+                    "n_simulations": n_sims,
+                }
+            )
 
         forecast = build_forecast(
             scenario_name,
@@ -228,7 +261,9 @@ class JobManager:
             n_simulations=n_sims,
             cases=cases,
             index_case_id=idx,
+            skip_earliest_symptom_case=skip_early,
             rng_seed=self._ensemble_config.rng_seed,
+            simulation_progress=_progress_sink,
         )
         if hasattr(self._repository, "cache_forecast"):
             self._repository.cache_forecast(scenario_name, forecast)
@@ -300,32 +335,119 @@ class JobManager:
         })
 
         from eosp.services.forecast import build_forecast
+        from eosp.services.hub_timeline.config import default_hub_timeline_config
 
         n_sims = int(record.detail.get("n_simulations") or self._ensemble_config.n_simulations)
-        scenarios_to_run: list[str] = record.detail.get("scenarios_requested") or list(self._scenarios.keys())
-        idx = get_settings().hub_index_case_id
+        requested = record.detail.get("scenarios_requested") or list(self._scenarios.keys())
+        scenarios_to_run = [scen for scen in requested if scen in self._scenarios]
+        st = get_settings()
+        idx = st.hub_index_case_id
+        skip_early = bool(st.hub_skip_earliest_symptom_case) and not (idx or "").strip()
         refreshed: list[str] = []
-        for scen in scenarios_to_run:
-            if scen not in self._scenarios:
-                continue
+        horizon_days = int(default_hub_timeline_config().horizon_days)
+        timeline_total = len(scenarios_to_run) * n_sims * horizon_days
+
+        def _sim_event(
+            *,
+            trajectories: int,
+            scenario: str | None,
+            scenarios_done: int,
+            status: str,
+        ) -> dict[str, Any]:
+            body: dict[str, Any] = {
+                "stage": "simulation",
+                "status": status,
+                "trajectories": trajectories,
+                "total": timeline_total,
+                "scenarios_done": scenarios_done,
+                "scenarios_total": len(scenarios_to_run),
+                "calendar_days_total": horizon_days,
+                "n_simulations": n_sims,
+            }
+            if scenario is not None:
+                body["scenario"] = scenario
+            return body
+
+        sim_t0 = time.monotonic()
+
+        def _scenario_progress(si_plot: int, scen_label: str) -> Any:
+            def sink(**kw: Any) -> None:
+                elapsed = time.monotonic() - sim_t0
+                cdtot = int(kw.get("calendar_days_total") or horizon_days)
+                di = int(kw.get("calendar_day_index") or 0)
+                trj = int(kw.get("trajectory_index") or 0)
+                base = si_plot * n_sims * cdtot
+                td = min(base + (trj - 1) * cdtot + di, timeline_total)
+                record.push_event(
+                    {
+                        "stage": "simulation",
+                        "status": "active",
+                        "scenario": scen_label,
+                        "scenario_index": si_plot,
+                        "scenarios_done": si_plot,
+                        "scenarios_total": len(scenarios_to_run),
+                        "calendar_day_index": di,
+                        "calendar_date": kw.get("calendar_date"),
+                        "calendar_days_total": cdtot,
+                        "trajectory_index": trj,
+                        "trajectories_total_mc": n_sims,
+                        "trajectories": td,
+                        "total": timeline_total,
+                        "elapsed_s": elapsed,
+                        "n_simulations": n_sims,
+                    }
+                )
+
+            return sink
+
+        if scenarios_to_run:
+            ev0 = _sim_event(
+                trajectories=0,
+                scenario=scenarios_to_run[0],
+                scenarios_done=0,
+                status="active",
+            )
+            ev0["elapsed_s"] = 0.0
+            record.push_event(ev0)
+
+        for si, scen in enumerate(scenarios_to_run):
             forecast = build_forecast(
                 scen,
                 inference,
                 n_simulations=n_sims,
                 cases=cases,
                 index_case_id=idx,
+                skip_earliest_symptom_case=skip_early,
                 rng_seed=self._ensemble_config.rng_seed,
+                simulation_progress=_scenario_progress(si, scen),
             )
             if hasattr(self._repository, "cache_forecast"):
                 self._repository.cache_forecast(scen, forecast)
             refreshed.append(scen)
+            done_units = (si + 1) * n_sims * horizon_days
+            ev = _sim_event(
+                trajectories=done_units,
+                scenario=scen,
+                scenarios_done=si + 1,
+                status="active",
+            )
+            ev["elapsed_s"] = time.monotonic() - sim_t0
+            record.push_event(ev)
 
-        record.push_event({
-            "stage": "simulation",
-            "status": "complete",
-            "n_simulations": n_sims,
-            "scenarios": refreshed,
-        })
+        record.push_event(
+            {
+                "stage": "simulation",
+                "status": "complete",
+                "trajectories": timeline_total,
+                "total": timeline_total,
+                "n_simulations": n_sims,
+                "scenarios": refreshed,
+                "elapsed_s": (time.monotonic() - sim_t0) if scenarios_to_run else 0.0,
+                "scenarios_done": len(refreshed),
+                "scenarios_total": len(scenarios_to_run),
+                "calendar_days_total": horizon_days,
+            }
+        )
         record.detail["simulator"] = "hub_timeline"
         record.detail["scenarios_refreshed"] = refreshed
         record.detail["n_simulations"] = n_sims

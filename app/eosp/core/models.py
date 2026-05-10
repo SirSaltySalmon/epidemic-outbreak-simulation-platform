@@ -201,7 +201,7 @@ class ForecastResponse(BaseModel):
 class ForecastRunRequest(BaseModel):
     scenarios: list[str] = Field(default_factory=lambda: ["baseline"])
     model_version: str = "latest"
-    n_simulations: int = Field(default=10000, ge=100, le=100000)
+    n_simulations: int = Field(default=100, ge=1, le=100000)
 
 
 class ForecastRunItem(BaseModel):

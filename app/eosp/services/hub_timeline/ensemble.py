@@ -5,7 +5,9 @@ from __future__ import annotations
 import hashlib
 import os
 import time
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from datetime import date
 from pathlib import Path
 from uuid import uuid4
 
@@ -106,7 +108,9 @@ def run_hub_timeline_forecast(
     n_simulations: int,
     rng_seed: int,
     index_case_id: str | None = None,
+    skip_earliest_symptom_case: bool = False,
     max_workers: int | None = None,
+    simulation_progress: Callable[..., None] | None = None,
 ) -> ForecastResponse:
     routes_path, airports_path = _world_paths()
     allowed, outbound, iata_to_country, dest_weights = build_world_graph(routes_path, airports_path)
@@ -122,31 +126,64 @@ def run_hub_timeline_forecast(
     cfg = _scenario_config(spec, base_cfg, inference)
     params = _inference_param_draws(inference, spec, cfg)
 
-    eligible = eligible_hub_cases(list(cases), allowed_iatas=allowed, index_case_id=index_case_id)
+    eligible = eligible_hub_cases(
+        list(cases),
+        allowed_iatas=allowed,
+        index_case_id=index_case_id,
+        skip_earliest_symptom_case=skip_earliest_symptom_case,
+    )
     if not eligible:
         raise ValueError("No eligible hub cases after IATA filter — cannot run hub timeline forecast")
 
     anchor, sim_days = compute_simulation_calendar(eligible, horizon_days=cfg.horizon_days)
 
-    workers = min(max_workers or (os.cpu_count() or 4), 16)
-
-    def one(seed: int) -> HubTrajectorySnapshot:
-        rng = np.random.default_rng(int(seed))
-        return simulate_trajectory(
-            eligible,
-            inference_params=params,
-            world=world,
-            config=cfg,
-            rng=rng,
-            sim_days=sim_days,
-        )
-
     seeds = [rng_seed + int(i) * 100_003 for i in range(n_simulations)]
     trajs: list[HubTrajectorySnapshot] = []
-    with ThreadPoolExecutor(max_workers=max(1, workers)) as ex:
-        futs = {ex.submit(one, s): s for s in seeds}
-        for fut in as_completed(futs):
-            trajs.append(fut.result())
+    n_days_total = len(sim_days)
+
+    if simulation_progress is None:
+        workers = min(max_workers or (os.cpu_count() or 4), 16)
+
+        def one(seed: int) -> HubTrajectorySnapshot:
+            rng = np.random.default_rng(int(seed))
+            return simulate_trajectory(
+                eligible,
+                inference_params=params,
+                world=world,
+                config=cfg,
+                rng=rng,
+                sim_days=sim_days,
+            )
+
+        with ThreadPoolExecutor(max_workers=max(1, workers)) as ex:
+            futs = {ex.submit(one, s): s for s in seeds}
+            for fut in as_completed(futs):
+                trajs.append(fut.result())
+    else:
+        for traj_i, seed in enumerate(seeds):
+            rng = np.random.default_rng(int(seed))
+
+            def on_day(di: int, ddt: date, *, _ti: int = traj_i) -> None:
+                simulation_progress(
+                    scenario=scenario_name,
+                    calendar_day_index=di + 1,
+                    calendar_date=ddt.isoformat(),
+                    calendar_days_total=n_days_total,
+                    trajectory_index=_ti + 1,
+                    trajectories_total=int(n_simulations),
+                )
+
+            trajs.append(
+                simulate_trajectory(
+                    eligible,
+                    inference_params=params,
+                    world=world,
+                    config=cfg,
+                    rng=rng,
+                    sim_days=sim_days,
+                    on_day_complete=on_day,
+                )
+            )
 
     n_days = len(sim_days)
     stack_cases = np.stack([t.global_cases for t in trajs], axis=0)
@@ -193,6 +230,8 @@ def run_hub_timeline_forecast(
         "ensemble_spec_hash": hkey,
         "n_simulations": n_simulations,
         "inference_version": inference.version,
+        "model_version": inference.version,
+        "hub_skip_earliest_symptom_case": skip_earliest_symptom_case,
         "rng_seed": rng_seed,
         "geo_forecast": geo,
         "replay_geo": replay,
@@ -220,6 +259,7 @@ def run_forecast_simulation(
     n_simulations: int,
     rng_seed: int | None = None,
     index_case_id: str | None = None,
+    skip_earliest_symptom_case: bool = False,
 ) -> tuple[ForecastRunItem, ForecastResponse]:
     from eosp.core.compute_config import EnsembleConfig
 
@@ -233,6 +273,7 @@ def run_forecast_simulation(
         n_simulations=n_simulations,
         rng_seed=seed,
         index_case_id=index_case_id,
+        skip_earliest_symptom_case=skip_earliest_symptom_case,
     )
     elapsed = time.perf_counter() - t0
     final = forecast.forecast[-1]

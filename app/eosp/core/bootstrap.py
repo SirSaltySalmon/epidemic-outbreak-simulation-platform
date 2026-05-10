@@ -56,7 +56,7 @@ def build_repository_with_status() -> tuple[Any, dict[str, Any]]:
 
 
 def ensemble_config_from_env() -> EnsembleConfig:
-    n_sims = int(os.environ.get("EOSP_ENSEMBLE_SIMULATIONS", "10000"))
+    n_sims = int(os.environ.get("EOSP_ENSEMBLE_SIMULATIONS", "100"))
     return EnsembleConfig(n_simulations=n_sims, n_days=14, parallel=True)
 
 

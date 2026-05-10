@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections import defaultdict
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import date
 from typing import Any
@@ -183,8 +184,11 @@ def simulate_trajectory(
     config: HubTimelineSimulatorConfig,
     rng: np.random.Generator,
     sim_days: list[date],
+    on_day_complete: Callable[[int, date], None] | None = None,
 ) -> HubTrajectorySnapshot:
-    """Run one stochastic trajectory over ``sim_days`` (length ``horizon_days``)."""
+    """Run one stochastic trajectory over ``sim_days`` (length ``horizon_days``).
+
+    ``on_day_complete(day_index_0_based, calendar_date)`` fires after each simulated day."""
 
     n_days = len(sim_days)
     if n_days == 0:
@@ -446,6 +450,9 @@ def simulate_trajectory(
         g_deaths[day_i] = float(
             sum(1.0 for ag in agents if ag.state is not None and int(ag.state) == int(AgentState.D))
         )
+
+        if on_day_complete is not None:
+            on_day_complete(day_i, d)
 
         for ag in agents:
             if ag.kind == AgentKind.SYNTHETIC and ag.state is not None:

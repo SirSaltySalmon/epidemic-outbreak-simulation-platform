@@ -131,9 +131,11 @@ def test_full_refresh_records_simulation_complete_after_inference(monkeypatch):
         manager.shutdown()
 
     simulation_events = [event for event in events if event.get("stage") == "simulation"]
-    assert len(simulation_events) == 1
-    assert simulation_events[0]["status"] == "complete"
-    assert "baseline" in (simulation_events[0].get("scenarios") or [])
+    assert len(simulation_events) >= 2
+    assert simulation_events[0]["status"] == "active"
+    assert simulation_events[0]["trajectories"] == 0
+    assert simulation_events[-1]["status"] == "complete"
+    assert "baseline" in (simulation_events[-1].get("scenarios") or [])
     assert repo.forecasts.get("baseline") is not None
 
 

@@ -29,6 +29,21 @@ def _individual(
     )
 
 
+def test_anchor_skips_earliest_symptom_when_flag_set():
+    early_id = uuid4()
+    cases = [
+        _individual(early_id, date(2026, 4, 6), "JNB", "first"),
+        _individual(uuid4(), date(2026, 4, 24), "JNB", "second"),
+    ]
+    allowed = frozenset({"JNB"})
+    elig = eligible_hub_cases(
+        cases, allowed_iatas=allowed, index_case_id=None, skip_earliest_symptom_case=True
+    )
+    anchor, days = compute_simulation_calendar(elig, horizon_days=30)
+    assert anchor == date(2026, 4, 24)
+    assert early_id not in {c.case_id for c in elig}
+
+
 def test_anchor_skips_index_case_for_anchor_only():
     index_id = uuid4()
     cases = [

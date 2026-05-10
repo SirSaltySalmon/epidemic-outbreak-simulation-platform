@@ -29,7 +29,7 @@ def test_simulation_complete_event_renders_stage_done_with_details():
 
     assert 'event.status === "complete" ? "done" : "active"' in source
     assert '_stageDetailHtml(n, "done", data)' in source
-    assert "Trajectories" in source
+    assert "Hub timeline" in source
 
 
 def test_progress_stream_reports_close_before_completion_via_fetch_reader():

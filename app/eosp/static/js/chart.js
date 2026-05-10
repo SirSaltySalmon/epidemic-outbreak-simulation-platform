@@ -75,7 +75,12 @@ export function renderForecast(containerId, forecast, prevForecast) {
       const m = Math.round(last.cases_cumulative.median);
       const lo = Math.round(last.cases_cumulative.ci_95_lower);
       const hi = Math.round(last.cases_cumulative.ci_95_upper);
-      expl.textContent = `Day 14 · median ${m} cumulative cases · 95% CI ${lo}–${hi}.`;
+      const metaH =
+        forecast.metadata && typeof forecast.metadata.horizon_days === "number"
+          ? forecast.metadata.horizon_days
+          : forecast.forecast.length;
+      const lastDayIdx = typeof last.day === "number" ? last.day : forecast.forecast.length;
+      expl.textContent = `Day ${lastDayIdx} of ${metaH} · median ${m} cumulative cases · 95% CI ${lo}–${hi}.`;
     }
   }
 }

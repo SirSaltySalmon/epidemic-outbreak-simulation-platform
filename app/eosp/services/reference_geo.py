@@ -46,7 +46,7 @@ def countries_for_api() -> list[dict[str, str]]:
     return [{"code": c, "name": labels.get(c, c)} for c in sorted(codes)]
 
 
-def airports_for_api(country: str | None) -> list[dict[str, str]]:
+def airports_for_api(country: str | None) -> list[dict[str, Any]]:
     cc = (country or "").strip().upper()
     airports = _airport_coords()
     rows = []
@@ -59,6 +59,8 @@ def airports_for_api(country: str | None) -> list[dict[str, str]]:
             "iata": iata,
             "city": city,
             "country": country_code,
+            "lat": meta.get("lat"),
+            "lng": meta.get("lng"),
             "label": f"{iata} · {city}" + (f" ({country_code})" if country_code else ""),
         })
     rows.sort(key=lambda x: x["iata"])

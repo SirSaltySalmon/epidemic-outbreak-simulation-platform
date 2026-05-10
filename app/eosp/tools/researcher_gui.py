@@ -61,10 +61,34 @@ _SCENARIO_ORDER_LABELS: list[tuple[str, str]] = [
 ]
 
 _FIDELITY_OPTIONS: tuple[tuple[int, str], ...] = (
-    (100, "100 (fast preview)"),
-    (1000, "1,000"),
-    (10000, "10,000 (full)"),
+    (1, "1 (preview)"),
+    (10, "10"),
+    (100, "100"),
 )
+
+
+def _format_job_event_for_log(ev: dict[str, Any]) -> str:
+    """Human-readable pipeline log lines (SSE payload shape)."""
+
+    stage = ev.get("stage")
+    if stage != "simulation":
+        try:
+            return json.dumps(ev, default=str)
+        except TypeError:
+            return str(ev)
+    cd = ev.get("calendar_date")
+    if isinstance(cd, str) and cd and ev.get("calendar_day_index") is not None:
+        parts = [
+            f"simulation · {ev.get('scenario') or '?'} · {cd}",
+            f"day {ev.get('calendar_day_index')}/{ev.get('calendar_days_total') or '?'}",
+        ]
+        if ev.get("trajectory_index") is not None:
+            parts.append(f"run {ev.get('trajectory_index')}/{ev.get('trajectories_total_mc')}")
+        return " · ".join(parts)
+    try:
+        return json.dumps(ev, default=str)
+    except TypeError:
+        return str(ev)
 
 
 def _scenario_rows_for_gui() -> list[tuple[str, str]]:
@@ -146,10 +170,11 @@ class ResearcherGuiApp:
     def _build_warning_banner(self) -> None:
         db_url = get_settings().database_url or "(unset)"
         tip = (
-            "This tool runs Bayesian inference locally and writes results to the database "
-            "(forward simulation was removed; see docs/ABM_RETIREMENT.md). "
-            "configured in EOSP_DATABASE_URL. Use a development database unless you intend to "
-            "update production."
+            "This tool runs Bayesian inference then hub-timeline Monte Carlo locally and writes "
+            "results to the database. The pipeline streams per-simulated-calendar-day progress to "
+            "the job log below (and the web researcher console over SSE). Typical default: 100 Monte "
+            "Carlo runs per scenario. EOSP_DATABASE_URL must point at PostgreSQL; use a development "
+            "database unless you intend to update production."
         )
         frame = ttk.Frame(self.root)
         frame.pack(fill=tk.X, padx=8, pady=8)
@@ -170,7 +195,7 @@ class ResearcherGuiApp:
             self._scenario_vars[sid] = var
             ttk.Checkbutton(scen_frame, text=f"{lbl} ({sid})", variable=var).pack(anchor=tk.W)
 
-        fid_frame = ttk.LabelFrame(tab, text="Simulation fidelity (Monte Carlo trajectories)")
+        fid_frame = ttk.LabelFrame(tab, text="Simulation fidelity (Monte Carlo runs per scenario)")
         fid_frame.pack(fill=tk.X, padx=8, pady=6)
         self._fidelity_var = tk.IntVar(value=100)
         for n, label in _FIDELITY_OPTIONS:
@@ -274,10 +299,8 @@ class ResearcherGuiApp:
             return
 
         for ev in self._jobs.drain_events(jid):
-            try:
-                self._append_log(json.dumps(ev, default=str))
-            except TypeError:
-                self._append_log(str(ev))
+            line = _format_job_event_for_log(ev)
+            self._append_log(line)
 
         rec = self._jobs.get_status(jid)
         if rec is None:

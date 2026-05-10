@@ -269,8 +269,10 @@ class InMemoryRepository:
         cached = self.forecast_cache.get(scenario)
         if cached is None:
             return None
-        if model_version and model_version != "latest" and cached.metadata.get("model_version") != model_version:
-            return None
+        if model_version and model_version != "latest":
+            cached_mv = cached.metadata.get("inference_version") or cached.metadata.get("model_version")
+            if cached_mv != model_version:
+                return None
         return cached
 
     def cache_geo_outbreak(self, inference_version: str, payload: dict[str, Any]) -> None:
@@ -785,7 +787,14 @@ class SqlRepository:
             return items
 
     def cache_forecast(self, scenario: str, response: ForecastResponse) -> None:
-        model_version = str(response.metadata.get("model_version", "latest"))
+        # FK forecast_results_model_version_fkey → inference_traces.version (migration); must be concrete version id.
+        raw_mv = response.metadata.get("inference_version") or response.metadata.get("model_version")
+        model_version = str(raw_mv).strip() if raw_mv else ""
+        if not model_version or model_version == "latest":
+            raise ValueError(
+                "Forecast metadata must carry inference_version (matching inference_traces.version) "
+                "to persist forecasts; refuse literal 'latest'."
+            )
         with self.session_factory() as session:
             payload = response.model_dump(mode="json")
             session.add(
@@ -794,7 +803,7 @@ class SqlRepository:
                     model_version=model_version,
                     scenario=scenario,
                     forecast_json=payload,
-                    n_simulations=int(response.metadata.get("n_simulations", 10000)),
+                    n_simulations=int(response.metadata.get("n_simulations", 100)),
                     execution_time_seconds=float(response.metadata.get("execution_time_seconds", 0.0)),
                     s3_archive_path=None,
                 )

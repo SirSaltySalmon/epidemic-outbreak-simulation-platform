@@ -21,9 +21,11 @@ async function boot() {
 
   // World map
   initMap("world-map");
-  const gf = data.forecast_baseline?.metadata?.geo_forecast ?? null;
+  const meta = data.forecast_baseline?.metadata ?? {};
+  const gf = meta.geo_forecast ?? null;
+  const rg = meta.replay_geo ?? null;
   if (data.geo) {
-    renderGeoData(data.geo, gf);
+    await renderGeoData(data.geo, gf, rg);
   }
 
   // Researcher drawer wiring (after Clerk — jobs/active needs a token in prod)
@@ -95,6 +97,7 @@ function _applyDashboardBundle(data) {
 
   const errForecast = data.errors?.forecast_baseline;
   if (data.forecast_baseline && !errForecast) {
+    _applyForecastHorizonUi(data.forecast_baseline);
     renderForecast(
       "forecast-chart",
       data.forecast_baseline,
@@ -105,6 +108,7 @@ function _applyDashboardBundle(data) {
   } else {
     purgeForecastChart("forecast-chart");
     _setText("chart-freshness", "");
+    _applyForecastHorizonUi(null);
     _applyForecastKpis(null, data.summary ?? null);
     _setText(
       "chart-explanation",
@@ -127,7 +131,7 @@ function _applyDashboardBundle(data) {
 
 function _onRunComplete() {
   get(_DASHBOARD_BOOTSTRAP, { cache: "no-store" })
-    .then((data) => {
+    .then(async (data) => {
       _hydrateScenarioExplanations(data.scenario_catalog);
       const catalogMeta = scenarioMetaFromCatalog(data.scenario_catalog);
       if (data.summary) {
@@ -135,12 +139,14 @@ function _onRunComplete() {
       }
       const errForecast = data.errors?.forecast_baseline;
       if (data.forecast_baseline && !errForecast) {
+        _applyForecastHorizonUi(data.forecast_baseline);
         renderForecast("forecast-chart", data.forecast_baseline);
         _applyForecastKpis(data.forecast_baseline, data.summary ?? null);
         _setText("chart-freshness", _forecastFreshnessLabel(data.forecast_baseline));
       } else {
         purgeForecastChart("forecast-chart");
         _setText("chart-freshness", "");
+        _applyForecastHorizonUi(null);
         _applyForecastKpis(null, data.summary ?? null);
         _setText(
           "chart-explanation",
@@ -157,8 +163,10 @@ function _onRunComplete() {
         });
       }
       if (data.geo) {
-        const gf = data.forecast_baseline?.metadata?.geo_forecast ?? null;
-        renderGeoData(data.geo, gf);
+        const m = data.forecast_baseline?.metadata ?? {};
+        const gf = m.geo_forecast ?? null;
+        const rg = m.replay_geo ?? null;
+        await renderGeoData(data.geo, gf, rg);
       }
       const versions = data.versions;
       if (versions?.versions?.length) {
@@ -209,6 +217,39 @@ function _waitForLibs(attempts = 0) {
 function _setText(id, text) {
   const el = document.getElementById(id);
   if (el) el.textContent = text;
+}
+
+/** @param {any} forecastResponse */
+function _applyForecastHorizonUi(forecastResponse) {
+  const h =
+    forecastResponse?.metadata && typeof forecastResponse.metadata.horizon_days === "number"
+      ? forecastResponse.metadata.horizon_days
+      : forecastResponse?.forecast?.length ?? null;
+  const chartH = document.getElementById("chart-heading-horizon");
+  if (chartH) {
+    chartH.textContent =
+      h != null
+        ? `Baseline Forecast · Cumulative cases · ${h}-day horizon`
+        : "Baseline Forecast · Cumulative cases · simulation horizon";
+  }
+  const casesLbl = document.getElementById("kpi-label-forecast-cases");
+  const deathsLbl = document.getElementById("kpi-label-forecast-deaths");
+  const casesTxt = h != null ? `${h}-day forecast · Cases` : "Forecast · Cases";
+  const deathsTxt = h != null ? `${h}-day forecast · Deaths` : "Forecast · Deaths";
+  if (casesLbl) casesLbl.textContent = casesTxt;
+  if (deathsLbl) deathsLbl.textContent = deathsTxt;
+  const tipC = document.getElementById("kpi-forecast-cases-tip");
+  const tipD = document.getElementById("kpi-forecast-deaths-tip");
+  const tipCases =
+    h != null
+      ? `Values are at day ${h} of the hub-timeline simulation (median cumulative infections and uncertainty).`
+      : "Forecasted cumulative infections at end of simulation horizon (median and uncertainty).";
+  const tipDeaths =
+    h != null
+      ? `Values are at day ${h} of the hub-timeline simulation (median cumulative deaths and uncertainty).`
+      : "Forecasted cumulative deaths at end of simulation horizon from the baseline scenario (median and uncertainty).";
+  if (tipC) tipC.setAttribute("data-tip", tipCases);
+  if (tipD) tipD.setAttribute("data-tip", tipDeaths);
 }
 
 /** @param {any} s */

@@ -32,7 +32,7 @@ python -m eosp.scripts.seed_dev_data
 python -m uvicorn eosp.main:app --app-dir app --reload
 ```
 
-PostgreSQL runs on `127.0.0.1:5432`; Redis runs on `127.0.0.1:6379`.
+PostgreSQL from Compose is exposed on `127.0.0.1:5433` (container still uses 5432 internally). That keeps host port 5432 free for a separately installed PostgreSQL on Windows. Redis runs on `127.0.0.1:6379`.
 
 ## Test
 

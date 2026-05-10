@@ -7,7 +7,8 @@ services:
       POSTGRES_USER: eosp
       POSTGRES_PASSWORD: eosp_dev_password
     ports:
-      - "5432:5432"
+      # Host 5433 avoids clashing with a local PostgreSQL service on Windows (often :5432).
+      - "5433:5432"
     volumes:
       - eosp_postgres_data:/var/lib/postgresql/data
     healthcheck:

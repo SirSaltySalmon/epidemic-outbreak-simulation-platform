@@ -10,7 +10,7 @@ WhoDonExtractMode = Literal["regex", "llm", "hybrid"]
 class Settings(BaseSettings):
     env: str = "development"
     database_url: str | None = None
-    redis_url: str | None = None
+    redis_url: str | None = None  # optional TCP URL; Upstash uses UPSTASH_REDIS_REST_* + redis_client.get_redis()
     who_don_poll_enabled: bool = False  # deprecated for ops; manual case entry preferred
     who_don_url: str = "https://www.who.int/emergencies/emergency-events/item/2026-e000227"
     who_don_poll_interval_seconds: int = 21_600

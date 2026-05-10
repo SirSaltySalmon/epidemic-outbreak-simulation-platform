@@ -1,10 +1,10 @@
 """EOSP CLI — inference refit only.
 
-Monte Carlo forward simulation was removed from the codebase. See docs/ABM_RETIREMENT.md.
+Forward simulation uses the hub timeline engine (``eosp.services.hub_timeline``) via
+``eosp.services.forecast.build_forecast`` and ``JobManager`` full refresh — not this script.
 
 Use ``--refit`` to run NumPyro NUTS over cases and persist ``InferenceResult``.
-To repopulate forecast caches, wire a replacement simulator into
-``eosp.services.forecast.build_forecast`` and ``JobManager``.
+To repopulate forecast caches, run a full refresh job or call the forecast API.
 """
 
 from __future__ import annotations
@@ -25,7 +25,7 @@ logger = logging.getLogger(__name__)
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="EOSP batch worker (inference refit only; forward ABM removed).",
+        description="EOSP batch worker (inference refit; forward MC via API/job).",
     )
     parser.add_argument(
         "--refit",

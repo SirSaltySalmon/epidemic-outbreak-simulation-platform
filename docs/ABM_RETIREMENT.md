@@ -16,8 +16,8 @@ The following were **removed** or **replaced with stubs** as part of this retire
 | [`app/eosp/services/ensemble.py`](../app/eosp/services/ensemble.py) | **Deleted** — `run_ensemble`, sampling, aggregation, geo forecast rollup, seed helpers |
 | [`app/eosp/services/geo_buckets.py`](../app/eosp/services/geo_buckets.py) | **Deleted** — bucket labels for ABM map accounting |
 | [`app/eosp/services/forecast.py`](../app/eosp/services/forecast.py) | **`build_forecast` / `run_forecast_engine`** call hub timeline Monte Carlo (`eosp.services.hub_timeline`); see [hub timeline design spec](../superpowers/specs/2026-05-10-eosp-hub-timeline-simulator-design.md) |
-| [`app/eosp/services/jobs.py`](../app/eosp/services/jobs.py) | **Full refresh** runs **inference only**; **no** post-inference ensemble loop; **`schedule_ensemble`** documents removal |
-| [`app/eosp/scripts/run_forecasts.py`](../app/eosp/scripts/run_forecasts.py) | **Stub** — prints that simulator is removed |
+| [`app/eosp/services/jobs.py`](../app/eosp/services/jobs.py) | **Full refresh** runs inference **then** hub timeline Monte Carlo per scenario; caches forecasts (see [`hub_timeline`](../app/eosp/services/hub_timeline/)) |
+| [`app/eosp/scripts/run_forecasts.py`](../app/eosp/scripts/run_forecasts.py) | **Inference refit CLI** — does not run forward simulation; use API/job refresh or `forecast.build_forecast` for MC |
 | [`app/eosp/services/itinerary.py`](../app/eosp/services/itinerary.py) | **Updated** — state constants inlined (no `abm` import) |
 | Tests | **Removed:** `test_abm.py`, `test_abm_geo_buckets.py`, `test_ensemble_geo_forecast.py`, `test_ensemble_scenario_params.py`, `test_seed_scaling.py`, `test_itinerary_abm_model.py`; **rewritten:** `test_api.py`, `test_jobs.py`, `test_geo_abm_heatmap.py`; **added:** `test_case_statistics.py` (line-list helper) |
 
@@ -27,7 +27,7 @@ The following were **removed** or **replaced with stubs** as part of this retire
 - [`app/eosp/services/world_builder.py`](../app/eosp/services/world_builder.py) — hub cohort + itinerary patches used to build networks
 - [`app/eosp/services/openflights_routes.py`](../app/eosp/services/openflights_routes.py), [`schedule_baseline.py`](../app/eosp/services/schedule_baseline.py), [`case_seed.py`](../app/eosp/services/case_seed.py)
 
-**Cache / DB:** Older deployments may still hold `ForecastResponse` JSON in forecast cache tables. New runs will not populate them until a new engine is wired. **Invalidate or version** cached rows if schema changes.
+**Cache / DB:** Forecast caches are repopulated by **`build_forecast`** (hub timeline). **Invalidate or version** cached rows if `ForecastResponse` / `geo_forecast` schema changes.
 
 ---
 

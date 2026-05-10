@@ -10,6 +10,8 @@
 
 **Authoritative design:** [`docs/superpowers/specs/2026-05-10-eosp-hub-timeline-simulator-design.md`](../specs/2026-05-10-eosp-hub-timeline-simulator-design.md).
 
+**Implementation status (shipped):** Code lives in [`app/eosp/services/hub_timeline/`](../../../../app/eosp/services/hub_timeline/). Timeline helpers: **`eligible_hub_cases`** includes both **individual** and **cohort** rows with valid hub IATA (minus optional index skip); **`eligible_individual_cases`** filters to `ObservationKind.INDIVIDUAL` for tests and legacy callers. **`compute_simulation_calendar`** anchors on **min(symptom_onset_date)** over whatever list is passed (use **eligible hub cases** so cohorts affect the anchor). Per spec §4.1, the **kernel** spawns **`cohort_size`** synthetic agents at cohort **onset** at the hub (`kernel.py`). See tests in `tests/test_hub_timeline_*.py` (including `test_eligible_hub_cases_includes_cohort_rows`).
+
 ---
 
 ## File map (roles)
@@ -18,7 +20,7 @@
 |------|----------------|
 | [`app/eosp/services/hub_timeline/__init__.py`](../../../../app/eosp/services/hub_timeline/__init__.py) | Re-export `run_hub_timeline_forecast`, `HubTimelineSimulatorConfig`, `simulate_trajectory` |
 | [`app/eosp/services/hub_timeline/config.py`](../../../../app/eosp/services/hub_timeline/config.py) | `HubTimelineSimulatorConfig` dataclass: contact means (`mu_travel`, `mu_stay`, `mu_onset_burst`), NB dispersion `r_nb`, load scale `alpha_load`, state weights (`k_presympt`, `eps_hosp`), mobility probabilities, durations scales, CFR, Horizon 30 flag, cohort policy |
-| [`app/eosp/services/hub_timeline/timeline.py`](../../../../app/eosp/services/hub_timeline/timeline.py) | `simulation_dates(cases, index_case_id)`, `eligible_cases()`, `ObservationKind.individual` filter |
+| [`app/eosp/services/hub_timeline/timeline.py`](../../../../app/eosp/services/hub_timeline/timeline.py) | `eligible_hub_cases`, `eligible_individual_cases`, `compute_simulation_calendar` — anchor + horizon |
 | [`app/eosp/services/hub_timeline/routes_graph.py`](../../../../app/eosp/services/hub_timeline/routes_graph.py) | Thin wrapper: `parse_route_edge_counts`, `outbound_weights_from_counts`, aggregate destination weights for **home sampling** (`3/4` branch) |
 | [`app/eosp/services/hub_timeline/contacts.py`](../../../../app/eosp/services/hub_timeline/contacts.py) | `draw_contact_count(rng, mu, r_nb)`, `prob_infection(p_transmit, h2h, load_eff, baseline_scale=1.0)` with `load_eff = 1 + cfg.alpha_load * max(0, L)` |
 | [`app/eosp/services/hub_timeline/agents.py`](../../../../app/eosp/services/hub_timeline/agents.py) | `@dataclass` `Agent`: `kind` synthetic|fixed, `state`, `iata_current`, `iata_home`, `mob_phase` (home_only|away_must_return), counters for E/P/I/H durations, `symptom_onset_date_ref` optional for fixed agents |

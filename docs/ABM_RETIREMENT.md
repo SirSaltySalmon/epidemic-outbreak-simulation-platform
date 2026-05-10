@@ -15,7 +15,7 @@ The following were **removed** or **replaced with stubs** as part of this retire
 | [`app/eosp/services/abm.py`](../app/eosp/services/abm.py) | **Deleted** — vectorized SEIPHR+D kernel |
 | [`app/eosp/services/ensemble.py`](../app/eosp/services/ensemble.py) | **Deleted** — `run_ensemble`, sampling, aggregation, geo forecast rollup, seed helpers |
 | [`app/eosp/services/geo_buckets.py`](../app/eosp/services/geo_buckets.py) | **Deleted** — bucket labels for ABM map accounting |
-| [`app/eosp/services/forecast.py`](../app/eosp/services/forecast.py) | **`build_forecast` / `run_forecast_engine`** raise `SimulatorRemovedError` (no on-demand simulation) |
+| [`app/eosp/services/forecast.py`](../app/eosp/services/forecast.py) | **`build_forecast` / `run_forecast_engine`** call hub timeline Monte Carlo (`eosp.services.hub_timeline`); see [hub timeline design spec](../superpowers/specs/2026-05-10-eosp-hub-timeline-simulator-design.md) |
 | [`app/eosp/services/jobs.py`](../app/eosp/services/jobs.py) | **Full refresh** runs **inference only**; **no** post-inference ensemble loop; **`schedule_ensemble`** documents removal |
 | [`app/eosp/scripts/run_forecasts.py`](../app/eosp/scripts/run_forecasts.py) | **Stub** — prints that simulator is removed |
 | [`app/eosp/services/itinerary.py`](../app/eosp/services/itinerary.py) | **Updated** — state constants inlined (no `abm` import) |
@@ -131,6 +131,8 @@ So **posteriors** were **consistent with** a simplified renewal/growth embedding
 
 ## 6. Wiring a new simulator
 
+**Implemented:** [Hub timeline simulator design (2026-05-10)](superpowers/specs/2026-05-10-eosp-hub-timeline-simulator-design.md) — code in [`app/eosp/services/hub_timeline`](../../app/eosp/services/hub_timeline/).
+
 ```
 cases → run_inference(network) → InferenceResult (+ posterior arrays)
                     ↓
@@ -144,8 +146,8 @@ cases → run_inference(network) → InferenceResult (+ posterior arrays)
 
 | Location | Responsibility |
 |----------|----------------|
-| [`forecast.py`](../app/eosp/services/forecast.py) | Replace `SimulatorRemovedError` path with call to new engine; optional in-memory `_FORECAST_CACHE` |
-| [`jobs.py`](../app/eosp/services/jobs.py) | After `_update_inference`, invoke new multi-scenario loop (or single “all scenarios” API) |
+| [`forecast.py`](../app/eosp/services/forecast.py) | `build_forecast` / `run_forecast_engine` hub timeline ensemble; optional `_FORECAST_CACHE` |
+| [`jobs.py`](../app/eosp/services/jobs.py) | After `_update_inference`, runs hub timeline `build_forecast` per scenario and `cache_forecast` |
 | [`routes.py`](../app/eosp/api/routes.py) | `POST /forecasts/run` unchanged contract if response shape matches |
 | [`repository.py`](../app/eosp/core/repository.py) | `cache_forecast` / `get_cached_forecast` |
 | [`geo.py`](../app/eosp/services/geo.py) | Accept new heat payload shape; set `risk_source` metadata |
@@ -184,4 +186,4 @@ CaseRecord[] ──► run_inference ──► InferenceResult
 
 ## 8. User-facing state
 
-Until a replacement ships, **forecast endpoints** return **503** / **`ForecastNotCachedError`** unless **legacy cache** rows exist. Console copy should say the **Monte Carlo engine was removed** and point here.
+Until the **hub timeline** engine shipped, **forecast endpoints** could return **503** / **`ForecastNotCachedError`** unless **legacy cache** rows exist. Current code runs `eosp.services.hub_timeline` after inference and on-demand from Console when `[simulation]` extras are installed.

@@ -213,10 +213,13 @@ def transmission_probability(p_transmit, h2h, load_at_hub, *, alpha_load):
 
 - [ ] Synthetic mobility: **`step_mobility_synthetic(agent, rng, outbound, cfg)`**:
 
-  Rules (v1 implementable):
+  Rules (v1 implementable). **Defaults (reasonable constants until calibrated):**
 
-  - If **`iata_current == iata_home`**: each day **`p_stay`** (default 0.55) remain; else pick random outbound flight from hub weighted by **`outbound[home]`** to visit **single** foreign hub (**set phase `away`**).
-  - If **`phase == away`**: **`p_return`** (default 0.65) set `current = home`; else stay at foreign hub. **Never** initiate a move to third airport while away.
+  - **`p_stay_when_at_home = 0.7`** — at home hub, stay that day without starting a trip; **`(1 - p_stay_when_at_home)`** = chance to sample one outbound leg (weighted) and enter **`away`**.
+  - **`p_return_when_away = 0.70`** — while away, return home vs extend stay one more day at the foreign hub.
+
+  - If **`iata_current == iata_home`**: each day **`p_stay_when_at_home`** to remain; else pick random outbound flight from **current** hub weighted by **`outbound[current]`** to visit **one** foreign hub (**set phase `away`**).
+  - If **`phase == away`**: **`p_return_when_away`** set `current = home`; else stay at foreign hub. **Never** initiate a move to a third airport while away.
 
 - [ ] Tests: RNG stub shows **no triangular routing** (`away` ⇒ only `stay` at foreign or `return`).
 
@@ -242,7 +245,7 @@ Add to **each scenario** optional JSON subtree:
 "hub_timeline": {
   "contacts": { "mu_travel": 20, "mu_stay": 5, "mu_onset_burst": 20, "r_dispersion": 8.0 },
   "load": { "alpha": 0.08 },
-  "mobility": { "p_stay_home": 0.55, "p_return_when_away": 0.65 }
+  "mobility": { "p_stay_when_at_home": 0.7, "p_return_when_away": 0.7 }
 }
 ```
 

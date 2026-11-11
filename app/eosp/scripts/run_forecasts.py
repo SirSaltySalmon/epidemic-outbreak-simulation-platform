@@ -15,7 +15,9 @@ import sys
 
 from eosp.core.compute_config import InferenceConfig
 from eosp.core.db import create_session_factory
+from eosp.core.read_cache import build_read_cache
 from eosp.core.repository import SqlRepository
+from eosp.core.settings import get_settings
 from eosp.services.inference import run_inference
 from eosp.services.network import build_default_network
 
@@ -51,7 +53,11 @@ def main() -> None:
     if session_factory is None:
         raise SystemExit("EOSP_DATABASE_URL is not configured. Copy .env.example to .env first.")
 
-    repository = SqlRepository(session_factory=session_factory)
+    # Attach the read cache so the refit invalidates cached dashboard responses.
+    repository = SqlRepository(
+        session_factory=session_factory,
+        read_cache=build_read_cache(get_settings().database_url),
+    )
     cases = list(repository.list_cases())
     if not cases:
         raise SystemExit("Cannot refit without at least one case in the database.")

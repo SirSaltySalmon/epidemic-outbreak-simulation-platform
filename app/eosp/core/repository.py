@@ -51,8 +51,6 @@ class InMemoryRepository:
     forecast_runs: list[ForecastRunItem] | None = None
     forecast_cache: dict[str, ForecastResponse] = field(default_factory=dict)
     external_feed_snapshots: dict[str, _StoredFeed] = field(default_factory=dict)
-    geo_outbreak_cache: dict[str, Any] | None = None
-    geo_outbreak_cache_inference_version: str | None = None
 
     def case_summary(self):
         feed_last = max(
@@ -275,17 +273,11 @@ class InMemoryRepository:
                 return None
         return cached
 
-    def cache_geo_outbreak(self, inference_version: str, payload: dict[str, Any]) -> None:
-        self.geo_outbreak_cache_inference_version = inference_version
-        self.geo_outbreak_cache = payload
-
-    def get_geo_outbreak_cache(self, inference_version: str) -> dict[str, Any] | None:
-        if self.geo_outbreak_cache is None or self.geo_outbreak_cache_inference_version != inference_version:
-            return None
-        return self.geo_outbreak_cache
-
     def update_inference(self, inference: InferenceResult) -> None:
         self.inferences.insert(0, inference)
+
+    def list_inferences(self, limit: int = 10) -> list[InferenceResult]:
+        return self.inferences[:limit]
 
     def record_external_feed_poll(
         self, feed_key: str, fingerprint: str, *, treat_first_poll_as_changed: bool = False
@@ -315,8 +307,15 @@ def empty_repository() -> InMemoryRepository:
 @dataclass
 class SqlRepository:
     session_factory: object
-    geo_outbreak_cache: dict[str, Any] | None = field(default=None, repr=False)
-    geo_outbreak_cache_inference_version: str | None = field(default=None, repr=False)
+    #: Optional :class:`eosp.core.read_cache.ReadCache`; routes read it, every commit here invalidates it.
+    read_cache: Any | None = field(default=None, repr=False)
+
+    def _commit(self, session) -> None:
+        """Commit, then drop cached read responses — every commit in this class changes served data."""
+
+        session.commit()
+        if self.read_cache is not None:
+            self.read_cache.invalidate()
 
     def case_summary(self):
         with self.session_factory() as session:
@@ -448,7 +447,7 @@ class SqlRepository:
                     ip_address=None,
                 )
             )
-            session.commit()
+            self._commit(session)
             return case, validation
 
     def get_case(self, case_id: UUID) -> CaseRecord | None:
@@ -534,7 +533,7 @@ class SqlRepository:
                     ip_address=None,
                 )
             )
-            session.commit()
+            self._commit(session)
             return merged, validation
 
     def delete_case(self, case_id: UUID) -> bool:
@@ -554,7 +553,7 @@ class SqlRepository:
                     ip_address=None,
                 )
             )
-            session.commit()
+            self._commit(session)
             return True
 
     def upsert_external_observation(self, payload: CaseCreate) -> tuple[CaseRecord, ValidationResult, bool]:
@@ -714,7 +713,7 @@ class SqlRepository:
                     ip_address=None,
                 )
             )
-            session.commit()
+            self._commit(session)
             return case, validation, True
 
     def latest_inference(self) -> InferenceResult:
@@ -759,7 +758,7 @@ class SqlRepository:
                     ip_address=None,
                 )
             )
-            session.commit()
+            self._commit(session)
 
     def list_forecast_runs(self, limit: int = 10) -> list[ForecastRunItem]:
         with self.session_factory() as session:
@@ -808,7 +807,7 @@ class SqlRepository:
                     s3_archive_path=None,
                 )
             )
-            session.commit()
+            self._commit(session)
 
     def get_cached_forecast(self, scenario: str, model_version: str | None = None) -> ForecastResponse | None:
         with self.session_factory() as session:
@@ -819,15 +818,6 @@ class SqlRepository:
             if row is None:
                 return None
             return ForecastResponse.model_validate(row.forecast_json)
-
-    def cache_geo_outbreak(self, inference_version: str, payload: dict[str, Any]) -> None:
-        self.geo_outbreak_cache_inference_version = inference_version
-        self.geo_outbreak_cache = payload
-
-    def get_geo_outbreak_cache(self, inference_version: str) -> dict[str, Any] | None:
-        if self.geo_outbreak_cache is None or self.geo_outbreak_cache_inference_version != inference_version:
-            return None
-        return self.geo_outbreak_cache
 
     def update_inference(self, inference: InferenceResult) -> None:
         with self.session_factory() as session:
@@ -860,12 +850,24 @@ class SqlRepository:
                 row.posterior_summary = payload
                 row.diagnostics = inference.diagnostics
                 row.convergence_status = inference.diagnostics.get("convergence_status", row.convergence_status)
-            session.commit()
+            self._commit(session)
 
     @property
     def inferences(self) -> list[InferenceResult]:
         with self.session_factory() as session:
             rows = session.query(InferenceTraceRow).order_by(InferenceTraceRow.timestamp.desc()).all()
+            return [_inference_from_row(row) for row in rows]
+
+    def list_inferences(self, limit: int = 10) -> list[InferenceResult]:
+        """Newest ``limit`` inference traces (bounded query; ``inferences`` loads the whole table)."""
+
+        with self.session_factory() as session:
+            rows = (
+                session.query(InferenceTraceRow)
+                .order_by(InferenceTraceRow.timestamp.desc())
+                .limit(limit)
+                .all()
+            )
             return [_inference_from_row(row) for row in rows]
 
     @property
@@ -899,14 +901,14 @@ class SqlRepository:
                         last_changed_at=None,
                     )
                 )
-                session.commit()
+                self._commit(session)
                 return bool(treat_first_poll_as_changed)
             changed = row.content_fingerprint != fingerprint
             row.content_fingerprint = fingerprint
             row.last_checked_at = now
             if changed:
                 row.last_changed_at = now
-            session.commit()
+            self._commit(session)
             return changed
 
 

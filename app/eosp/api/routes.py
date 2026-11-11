@@ -1,10 +1,12 @@
 import asyncio
 import json
+from collections.abc import Callable
 from enum import Enum
 from typing import Any
 from uuid import UUID
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request, Response, status
+from fastapi.encoders import jsonable_encoder
 from pydantic import BaseModel, Field, field_validator, model_validator
 from fastapi.responses import StreamingResponse
 
@@ -43,6 +45,54 @@ _CACHE_REFERENCE_BUNDLE = "public, max-age=3600, stale-while-revalidate=86400"
 _CACHE_PUBLIC_CONFIG = "public, max-age=300"
 
 
+def _cached_json(
+    request: Request,
+    cache_control: str,
+    cache_key: str | None,
+    build: Callable[[], Any],
+) -> Response:
+    """Serve a public GET as JSON, via the shared read cache when the repository has one.
+
+    The cache (``SqlRepository.read_cache``) is invalidated by every repository write.
+    ``cache_key`` must come from a bounded set — validated parameters only, never raw
+    user strings — so callers pass ``None`` to skip caching for anything else.
+    Errors raised by ``build`` propagate and are never cached.
+    """
+
+    cache = getattr(request.app.state.repository, "read_cache", None) if cache_key else None
+    headers = {"Cache-Control": cache_control}
+    token: str | None = None
+    if cache is not None:
+        cached_body, token = cache.lookup(cache_key)
+        if cached_body is not None:
+            headers["X-EOSP-Cache"] = "hit"
+            return Response(content=cached_body, media_type="application/json", headers=headers)
+        headers["X-EOSP-Cache"] = "miss"
+    body = json.dumps(
+        jsonable_encoder(build()),
+        ensure_ascii=False,
+        allow_nan=False,
+        separators=(",", ":"),
+    )
+    if cache is not None:
+        cache.store(cache_key, body, token)
+    return Response(content=body, media_type="application/json", headers=headers)
+
+
+def _split_scenarios(raw: str) -> list[str]:
+    return [name.strip() for name in raw.split(",") if name.strip()]
+
+
+def _scenarios_cache_part(scenario_names: list[str]) -> str | None:
+    """Cache-key fragment for a scenario list, or ``None`` when it is not safely cacheable."""
+
+    if not scenario_names or len(set(scenario_names)) != len(scenario_names):
+        return None
+    if any(name not in SCENARIO_CONFIG for name in scenario_names):
+        return None
+    return ",".join(scenario_names)
+
+
 @router.get("/public-config")
 def public_config(response: Response) -> dict[str, str | None]:
     """Expose non-secret Clerk publishable key so the static UI can load Clerk."""
@@ -62,7 +112,7 @@ def _no_simulation_results_detail(scenario: str | None = None) -> str:
 
 def _inference_versions_dicts(repo: Any, limit: int) -> list[dict[str, Any]]:
     versions: list[dict[str, Any]] = []
-    for inference in repo.inferences[:limit]:
+    for inference in repo.list_inferences(limit):
         diag = inference.diagnostics
         rhat = diag.get("rhat") or {}
         versions.append(
@@ -247,7 +297,6 @@ def _compact_forecast_bootstrap_dict(d: dict[str, Any]) -> bool:
 @router.get("/dashboard/bootstrap")
 def dashboard_bootstrap(
     request: Request,
-    http_response: Response,
     scenarios: str = Query(
         default=_DEFAULT_BOOTSTRAP_SCENARIOS,
     ),
@@ -258,11 +307,34 @@ def dashboard_bootstrap(
         default=TimelineBootstrapDetail.compact,
         description="compact: final simulation day only in bundled forecasts (smaller payload); full: entire timeline in one response.",
     ),
-) -> dict[str, Any]:
+) -> Response:
     """One round-trip for the public dashboard: shared case read + geo + forecasts."""
 
-    http_response.headers["Cache-Control"] = _CACHE_DASHBOARD_AGGREGATE
+    scenario_names = _split_scenarios(scenarios)
+    # ``risk_model`` / ``metapop_runs`` are ignored by the geo kernel, so they are not part of the key.
+    scenarios_part = _scenarios_cache_part(scenario_names)
+    cache_key = (
+        f"bootstrap|{scenarios_part}|{version_limit}|{timeline_detail.value}" if scenarios_part else None
+    )
     repo = request.app.state.repository
+    return _cached_json(
+        request,
+        _CACHE_DASHBOARD_AGGREGATE,
+        cache_key,
+        lambda: _dashboard_bootstrap_payload(
+            repo, scenario_names, version_limit, risk_model, metapop_runs, timeline_detail
+        ),
+    )
+
+
+def _dashboard_bootstrap_payload(
+    repo: Any,
+    scenario_names: list[str],
+    version_limit: int,
+    risk_model: str | None,
+    metapop_runs: int | None,
+    timeline_detail: TimelineBootstrapDetail,
+) -> dict[str, Any]:
     cases, summary_tuple = repo.load_dashboard_cases_bundle()
     confirmed, suspected, deaths, last_updated, sources, feed_last = summary_tuple
     fd_med, fd_lo, fd_hi = _baseline_forecast_deaths_final_day(repo)
@@ -303,8 +375,7 @@ def dashboard_bootstrap(
             except ForecastNotCachedError:
                 forecast_prev = None
 
-    scenario_names = [name.strip() for name in scenarios.split(",") if name.strip()]
-    unknown = [name for name in scenario_names if name not in SCENARIO_CONFIG]
+    unknown =[name for name in scenario_names if name not in SCENARIO_CONFIG]
     scenarios_payload = None
     if unknown:
         errors["scenarios"] = f"Unknown scenario(s): {', '.join(unknown)}"
@@ -343,36 +414,46 @@ def dashboard_bootstrap(
 @router.get("/geo/outbreak")
 def geo_outbreak(
     request: Request,
-    http_response: Response,
     risk_model: str | None = Query(default=None),
     metapop_runs: int | None = Query(default=None, ge=1, le=5000),
-):
-    http_response.headers["Cache-Control"] = _CACHE_DASHBOARD_AGGREGATE
+) -> Response:
     repo = request.app.state.repository
-    cases = repo.list_cases()
-    return _build_geo_outbreak_for_cases(repo, cases, risk_model, metapop_runs)
+    # ``risk_model`` / ``metapop_runs`` are ignored by the geo kernel, so one key covers every variant.
+    return _cached_json(
+        request,
+        _CACHE_DASHBOARD_AGGREGATE,
+        "geo_outbreak",
+        lambda: _build_geo_outbreak_for_cases(repo, repo.list_cases(), risk_model, metapop_runs),
+    )
 
 
 @router.get("/geo/bundle")
 def geo_bundle(
     request: Request,
-    http_response: Response,
     risk_model: str | None = Query(default=None),
     metapop_runs: int | None = Query(default=None, ge=1, le=5000),
-) -> dict[str, Any]:
+) -> Response:
     """Unified geo payload (schema_version + layers). Same auth and cache policy as ``/geo/outbreak``."""
 
-    http_response.headers["Cache-Control"] = _CACHE_DASHBOARD_AGGREGATE
     repo = request.app.state.repository
-    cases = repo.list_cases()
-    return _build_geo_bundle_for_cases(repo, cases, risk_model, metapop_runs)
+    return _cached_json(
+        request,
+        _CACHE_DASHBOARD_AGGREGATE,
+        "geo_bundle",
+        lambda: _build_geo_bundle_for_cases(repo, repo.list_cases(), risk_model, metapop_runs),
+    )
 
 
 @router.get("/cases/summary", response_model=CaseSummary)
-def case_summary(request: Request, http_response: Response) -> CaseSummary:
-    http_response.headers["Cache-Control"] = _CACHE_DASHBOARD_AGGREGATE
-    confirmed, suspected, deaths, last_updated, sources, feed_last = request.app.state.repository.case_summary()
+def case_summary(request: Request) -> Response:
     repo = request.app.state.repository
+    return _cached_json(
+        request, _CACHE_DASHBOARD_AGGREGATE, "cases_summary", lambda: _case_summary_payload(repo)
+    )
+
+
+def _case_summary_payload(repo: Any) -> CaseSummary:
+    confirmed, suspected, deaths, last_updated, sources, feed_last = repo.case_summary()
     fd_med, fd_lo, fd_hi = _baseline_forecast_deaths_final_day(repo)
     return CaseSummary(
         total_confirmed=confirmed,
@@ -411,12 +492,18 @@ def _baseline_forecast_deaths_final_day(repo) -> tuple[float | None, float | Non
 @router.get("/cases")
 def list_cases(
     request: Request,
-    http_response: Response,
     country: str | None = None,
     status: CaseStatus | None = None,
-):
-    http_response.headers["Cache-Control"] = _CACHE_DASHBOARD_AGGREGATE
-    return request.app.state.repository.list_cases(country=country, status=status)
+) -> Response:
+    repo = request.app.state.repository
+    # ``country`` is a free-form string, so only the unfiltered / status-only lists are cached.
+    cache_key = f"cases|{status.value if status else ''}" if country is None else None
+    return _cached_json(
+        request,
+        _CACHE_DASHBOARD_AGGREGATE,
+        cache_key,
+        lambda: repo.list_cases(country=country, status=status),
+    )
 
 
 @router.get("/cases/{case_id}", response_model=CaseRecord)
@@ -506,41 +593,51 @@ def case_validation(case_id: UUID, request: Request):
 def forecast(
     scenario: str,
     request: Request,
-    http_response: Response,
     model_version: str = "latest",
     include_credible_intervals: bool = True,
-):
+) -> Response:
     if scenario not in SCENARIO_CONFIG:
         raise HTTPException(status_code=404, detail=f"Unknown scenario: {scenario}")
     repo = request.app.state.repository
-    inference = None
-    require_version_match = model_version != "latest"
-    if require_version_match:
-        inference = repo.get_inference(model_version)
-        if inference is None:
-            raise HTTPException(status_code=404, detail="Model version not found")
 
-    try:
-        payload = get_cached_forecast(
-            scenario,
-            repository=repo,
-            inference=inference,
-            require_version_match=require_version_match,
-        )
-    except ForecastNotCachedError as exc:
-        raise HTTPException(
-            status_code=503,
-            detail=_no_simulation_results_detail(exc.scenario),
-        ) from exc
+    def build() -> ForecastResponse:
+        inference = None
+        require_version_match = model_version != "latest"
+        if require_version_match:
+            inference = repo.get_inference(model_version)
+            if inference is None:
+                raise HTTPException(status_code=404, detail="Model version not found")
 
-    if not include_credible_intervals:
-        for point in payload.forecast:
-            for metric in (point.cases_cumulative, point.cases_new, point.deaths_cumulative):
-                for key in list(metric):
-                    if key.startswith("ci_"):
-                        del metric[key]
-    http_response.headers["Cache-Control"] = _CACHE_DASHBOARD_AGGREGATE
-    return payload
+        try:
+            payload = get_cached_forecast(
+                scenario,
+                repository=repo,
+                inference=inference,
+                require_version_match=require_version_match,
+            )
+        except ForecastNotCachedError as exc:
+            raise HTTPException(
+                status_code=503,
+                detail=_no_simulation_results_detail(exc.scenario),
+            ) from exc
+
+        if not include_credible_intervals:
+            # Copy first: the in-memory repository hands back its stored object.
+            payload = payload.model_copy(deep=True)
+            for point in payload.forecast:
+                for metric in (point.cases_cumulative, point.cases_new, point.deaths_cumulative):
+                    for key in list(metric):
+                        if key.startswith("ci_"):
+                            del metric[key]
+        return payload
+
+    # An entry is only stored after ``build`` validated ``model_version``, so unknown versions never fill the cache.
+    cache_key = (
+        f"forecast|{scenario}|{model_version}|{int(include_credible_intervals)}"
+        if len(model_version) <= 128
+        else None
+    )
+    return _cached_json(request, _CACHE_DASHBOARD_AGGREGATE, cache_key, build)
 
 
 @router.post("/forecasts/run", response_model=ForecastRunResponse)
@@ -719,9 +816,14 @@ async def job_events_stream(
 
 
 @router.get("/inference/versions")
-def inference_versions(request: Request, http_response: Response, limit: int = Query(default=10, ge=1, le=50)):
-    http_response.headers["Cache-Control"] = _CACHE_DASHBOARD_AGGREGATE
-    return {"versions": _inference_versions_dicts(request.app.state.repository, limit)}
+def inference_versions(request: Request, limit: int = Query(default=10, ge=1, le=50)) -> Response:
+    repo = request.app.state.repository
+    return _cached_json(
+        request,
+        _CACHE_DASHBOARD_AGGREGATE,
+        f"inference_versions|{limit}",
+        lambda: {"versions": _inference_versions_dicts(repo, limit)},
+    )
 
 
 @router.get("/inference/compare")
@@ -791,22 +893,26 @@ def hindcast_accuracy(model_version: str = "latest"):
 @router.get("/scenarios/compare")
 def scenario_comparison(
     request: Request,
-    http_response: Response,
     scenarios: str = _DEFAULT_BOOTSTRAP_SCENARIOS,
-):
-    http_response.headers["Cache-Control"] = _CACHE_DASHBOARD_AGGREGATE
-    scenario_names = [name.strip() for name in scenarios.split(",") if name.strip()]
+) -> Response:
+    scenario_names = _split_scenarios(scenarios)
     unknown = [name for name in scenario_names if name not in SCENARIO_CONFIG]
     if unknown:
         raise HTTPException(status_code=404, detail=f"Unknown scenario(s): {', '.join(unknown)}")
     repo = request.app.state.repository
-    try:
-        return compare_scenarios(scenario_names, repository=repo)
-    except ForecastNotCachedError as exc:
-        raise HTTPException(
-            status_code=503,
-            detail=_no_simulation_results_detail(exc.scenario),
-        ) from exc
+
+    def build():
+        try:
+            return compare_scenarios(scenario_names, repository=repo)
+        except ForecastNotCachedError as exc:
+            raise HTTPException(
+                status_code=503,
+                detail=_no_simulation_results_detail(exc.scenario),
+            ) from exc
+
+    scenarios_part = _scenarios_cache_part(scenario_names)
+    cache_key = f"scenarios_compare|{scenarios_part}" if scenarios_part else None
+    return _cached_json(request, _CACHE_DASHBOARD_AGGREGATE, cache_key, build)
 
 
 @router.get("/admin/data-quality/alerts")

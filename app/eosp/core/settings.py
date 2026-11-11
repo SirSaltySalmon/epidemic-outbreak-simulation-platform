@@ -11,6 +11,10 @@ class Settings(BaseSettings):
     env: str = "development"
     database_url: str | None = None
     redis_url: str | None = None  # optional TCP URL; Upstash uses UPSTASH_REDIS_REST_* + redis_client.get_redis()
+    #: Cache public GET responses in Upstash Redis (active only with Postgres + ``UPSTASH_REDIS_REST_*``).
+    read_cache_enabled: bool = True
+    #: Upper bound on staleness when a writer could not invalidate (see ``core/read_cache.py``).
+    read_cache_ttl_seconds: int = 300
     who_don_poll_enabled: bool = False  # deprecated for ops; manual case entry preferred
     who_don_url: str = "https://www.who.int/emergencies/emergency-events/item/2026-e000227"
     who_don_poll_interval_seconds: int = 21_600

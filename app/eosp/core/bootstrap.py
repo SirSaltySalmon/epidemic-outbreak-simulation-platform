@@ -10,7 +10,9 @@ from sqlalchemy import text
 
 from eosp.core.compute_config import EnsembleConfig, InferenceConfig
 from eosp.core.db import create_session_factory
+from eosp.core.read_cache import build_read_cache
 from eosp.core.repository import SqlRepository, empty_repository
+from eosp.core.settings import get_settings
 from eosp.services.jobs import JobManager
 from eosp.services.scenarios import SCENARIO_CONFIG
 
@@ -35,7 +37,8 @@ def build_repository_with_status() -> tuple[Any, dict[str, Any]]:
     try:
         with session_factory() as session:
             session.execute(text("select 1"))
-        return SqlRepository(session_factory=session_factory), {
+        read_cache = build_read_cache(get_settings().database_url)
+        return SqlRepository(session_factory=session_factory, read_cache=read_cache), {
             "storage": "postgres",
             "database_configured": True,
             "database_reachable": True,

@@ -2,7 +2,7 @@ from datetime import date, datetime
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import Boolean, Date, DateTime, Float, ForeignKey, Integer, JSON, String, func
+from sqlalchemy import Boolean, Date, DateTime, Float, ForeignKey, Index, Integer, JSON, String, func
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 
@@ -87,6 +87,8 @@ class InferenceTraceRow(Base):
 
 class ForecastResultRow(Base):
     __tablename__ = "forecast_results"
+    # Serves "latest forecast for a scenario" (WHERE scenario = ? ORDER BY generated_timestamp DESC LIMIT 1).
+    __table_args__ = (Index("idx_forecast_scenario_generated", "scenario", "generated_timestamp"),)
 
     forecast_id: Mapped[UUID] = mapped_column(primary_key=True)
     # Stored for traceability; intentionally not an FK so forecasts remain readable
